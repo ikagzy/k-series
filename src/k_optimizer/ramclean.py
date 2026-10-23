@@ -1,0 +1,143 @@
+"""RAM cleaning in the order the best-known cleaners (Mem Reduct, Wise Memory Optimizer, RAMMap) use.
+
+1. empty process working sets          (any user)
+2. flush the system file cache         (needs SeIncreaseQuotaPrivilege, i.e. admin)
+3. flush the modified page list        (needs SeProfileSingleProcessPrivilege, i.e. admin)
+4. purge the low-priority standby list (admin)
+5. purge the whole standby list        (admin, only when free memory is still low: dropping the
+                                        whole file cache otherwise just costs disk reads later)
+
+Each step is independent: one failing never stops the others. Without admin only step 1 runs.
+"""
+import ctypes
+from ctypes import wintypes
+from dataclasses import dataclass, field
+
+import psutil
+
+from k_optimizer import trimmer
+
+# SYSTEM_MEMORY_LIST_COMMAND values for NtSetSystemInformation(SystemMemoryListInformation = 80)
+FLUSH_MODIFIED = 3
+PURGE_STANDBY = 4
+PURGE_LOW_STANDBY = 5
+
+LOW_MEMORY_FRACTION = 0.10
+_SYSTEM_MEMORY_LIST_INFORMATION = 80
+_STEP_LABELS = {
+    "working_sets": "çalışma kümeleri",
+    "file_cache": "sistem önbelleği",
+    "modified": "değiştirilmiş sayfalar",
+    "low_standby": "düşük öncelikli bekleme listesi",
+    "standby": "bekleme listesi",
+}
+
+
+class _Luid(ctypes.Structure):
+    _fields_ = [("Low", wintypes.DWORD), ("High", wintypes.LONG)]
+
+
+class _LuidAndAttributes(ctypes.Structure):
+    _fields_ = [("Luid", _Luid), ("Attributes", wintypes.DWORD)]
+
+
+class _TokenPrivileges(ctypes.Structure):
+    _fields_ = [("Count", wintypes.DWORD), ("Privileges", _LuidAndAttributes * 1)]
+
+
+class WinMemOps:
+    def total_bytes(self) -> int:
+        return psutil.virtual_memory().total
+
+    def available_bytes(self) -> int:
+        return psutil.virtual_memory().available
+
+    def is_admin(self) -> bool:
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except (AttributeError, OSError):
+            return False
+
+    def _enable(self, name: str) -> bool:
+        try:
+            adv, k32 = ctypes.windll.advapi32, ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            token = wintypes.HANDLE()
+            if not adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(token)):
+                return False
+            try:
+                luid = _Luid()
+                if not adv.LookupPrivilegeValueW(None, name, ctypes.byref(luid)):
+                    return False
+                tp = _TokenPrivileges(1, (_LuidAndAttributes * 1)(_LuidAndAttributes(luid, 0x2)))
+                adv.AdjustTokenPrivileges(token, False, ctypes.byref(tp), 0, None, None)
+                return k32.GetLastError() == 0  # 1300 = privilege not held by this token
+            finally:
+                k32.CloseHandle(token)
+        except (AttributeError, OSError):
+            return False
+
+    def enable_privileges(self) -> bool:
+        a = self._enable("SeProfileSingleProcessPrivilege")
+        b = self._enable("SeIncreaseQuotaPrivilege")
+        return a and b
+
+    def trim_working_sets(self, pids) -> int:
+        return trimmer.trim_all(pids)
+
+    def flush_file_cache(self) -> bool:
+        try:
+            neg = ctypes.c_size_t(-1)
+            return bool(ctypes.windll.kernel32.SetSystemFileCacheSize(neg, neg, 0))
+        except (AttributeError, OSError):
+            return False
+
+    def memory_list(self, command: int) -> bool:
+        try:
+            cmd = ctypes.c_int(command)
+            status = ctypes.windll.ntdll.NtSetSystemInformation(
+                _SYSTEM_MEMORY_LIST_INFORMATION, ctypes.byref(cmd), ctypes.sizeof(cmd)
+            )
+            return status == 0
+        except (AttributeError, OSError):
+            return False
+
+
+@dataclass(frozen=True)
+class RamReport:
+    trimmed: int
+    freed_bytes: int
+    admin: bool
+    steps: dict[str, bool] = field(default_factory=dict)
+
+    def summary(self) -> str:
+        done = [_STEP_LABELS[k] for k, ok in self.steps.items() if ok]
+        failed = [_STEP_LABELS[k] for k, ok in self.steps.items() if not ok]
+        text = f"~{self.freed_bytes / 1024**2:.0f} MB RAM boşaldı · temizlenen: {', '.join(done) or '-'}"
+        if failed:
+            text += f" · başarısız: {', '.join(failed)}"
+        if not self.admin:
+            text += " · tam temizlik için yönetici olarak aç"
+        return text
+
+
+class RamCleaner:
+    def __init__(self, ops: WinMemOps | None = None):
+        self._ops = ops or WinMemOps()
+
+    def clean(self, pids) -> RamReport:
+        ops = self._ops
+        before = ops.available_bytes()
+        steps: dict[str, bool] = {}
+        admin = ops.is_admin()
+        privileged = admin and ops.enable_privileges()
+        trimmed = ops.trim_working_sets(pids)
+        steps["working_sets"] = True
+        if privileged:
+            steps["file_cache"] = ops.flush_file_cache()
+            steps["modified"] = ops.memory_list(FLUSH_MODIFIED)
+            steps["low_standby"] = ops.memory_list(PURGE_LOW_STANDBY)
+            if ops.available_bytes() < LOW_MEMORY_FRACTION * ops.total_bytes():
+                steps["standby"] = ops.memory_list(PURGE_STANDBY)
+        after = ops.available_bytes()
+        return RamReport(trimmed, max(0, after - before), admin, steps)

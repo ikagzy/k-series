@@ -1,11 +1,12 @@
+import queue
+import sys
 import threading
-import time
 import tkinter as tk
 from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, cli, monitor, throttle, trimmer, winutil
+from k_optimizer import classifier, cli, monitor, ramclean, throttle, winutil
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
 
@@ -138,6 +139,10 @@ class App(tk.Tk):
         self._throttler = throttle.Throttler(cli.session_path().with_name("throttle.json"))
         self._own = cli.own_pids()
         self._last_fg: int | None = None
+        self._ramcleaner = ramclean.RamCleaner()
+        self._ram_busy = False
+        self._ram_again = False
+        self._done: queue.SimpleQueue = queue.SimpleQueue()
         self._snap: Snapshot | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -157,6 +162,11 @@ class App(tk.Tk):
         foot.pack(fill="x", padx=24, pady=(0, 16))
         self._result = tk.Label(foot, text="", bg=BG, fg=MUTED, font=(_FONT, 10), anchor="w", justify="left")
         self._result.pack(side="left", fill="x", expand=True)
+        self._admin_link = None
+        if not self._ramcleaner._ops.is_admin():
+            self._admin_link = tk.Label(foot, text="🛡 Yönetici olarak aç", bg=BG, fg=NEON, font=(_FONT, 10, "bold"), cursor="hand2")
+            self._admin_link.pack(side="right", padx=(0, 18))
+            self._admin_link.bind("<Button-1>", lambda e: self._relaunch_as_admin())
         self._undo = tk.Label(foot, text="↶ Geri Al", bg=BG, fg=MUTED, font=(_FONT, 10, "bold"), cursor="hand2")
         self._undo.pack(side="right")
         self._undo.bind("<Button-1>", lambda e: self._restore())
@@ -195,16 +205,27 @@ class App(tk.Tk):
         self.after(400, self._track_foreground)
 
     def _frame(self):
+        while True:
+            try:
+                parts = self._done.get_nowait()
+            except queue.Empty:
+                break
+            self._ram_done(parts)
         for g in self._gauges.values():
             g.tick()
         self.after(_FRAME_MS, self._frame)
 
     def _clean(self, resource: str):
+        if resource == "ram":
+            return self._clean_ram()
         with self._lock:
             snap = self._snap
         if snap is None:
             return
-        before = psutil.virtual_memory().available
+        parts = self._close_safe(snap, resource) + self._throttle(snap, resource)
+        self._show(parts)
+
+    def _close_safe(self, snap: Snapshot, resource: str) -> list[str]:
         parts = []
         targets = classifier.safe_targets(
             snap.processes, self._known, cli.own_pids(), resource, winutil.visible_window_pids()
@@ -216,20 +237,52 @@ class App(tk.Tk):
                 parts.append(f"Windows bileşeni kapatıldı: {names}")
             if any(why == "yetki gerekir" for _, why in r.skipped):
                 parts.append("bazıları için yönetici yetkisi gerekir")
-        if resource in ("cpu", "gpu"):
-            parts += self._throttle(snap, resource)
-        if resource == "ram":
-            trimmed = trimmer.trim_all(p.pid for p in snap.processes)
-            time.sleep(0.4)
-            freed = max(0, psutil.virtual_memory().available - before)
-            parts.insert(0, f"~{freed / 1024**2:.0f} MB RAM boşaltıldı ({trimmed} sürecin belleği sıkıştırıldı)")
-        if not parts:
-            parts = ["Düşürülecek veya kapatılacak gereksiz yük yok."]
-            ok = False
-        else:
-            ok = True
-        self._result.configure(text=" · ".join(parts), fg=NEON if ok else MUTED)
+        return parts
+
+    def _show(self, parts: list[str]):
+        ok = bool(parts)
+        text = " · ".join(parts) if ok else "Düşürülecek veya kapatılacak gereksiz yük yok."
+        self._result.configure(text=text, fg=NEON if ok else MUTED)
         self._refresh_undo()
+
+    # RAM cleaning runs off the UI thread so the button never freezes or needs a cooldown.
+    # Clicks while a run is in flight are not dropped: one more run is queued right after it.
+    def _clean_ram(self):
+        if self._ram_busy:
+            self._ram_again = True
+            return
+        with self._lock:
+            snap = self._snap
+        if snap is None:
+            return
+        self._ram_busy = True
+        threading.Thread(target=self._ram_job, args=(snap,), daemon=True).start()
+
+    def _ram_job(self, snap: Snapshot):
+        try:
+            parts = self._close_safe(snap, "ram")
+            report = self._ramcleaner.clean([p.pid for p in snap.processes])
+            parts.insert(0, report.summary())
+        except Exception as e:  # never let a failed step kill the worker silently
+            parts = [f"RAM temizliği hata verdi: {e}"]
+        self._done.put(parts)
+
+    def _ram_done(self, parts: list[str]):
+        self._ram_busy = False
+        self._show(parts)
+        if self._ram_again:
+            self._ram_again = False
+            self._clean_ram()
+
+    def _relaunch_as_admin(self):
+        import ctypes
+
+        if getattr(sys, "frozen", False):
+            exe, params = sys.executable, ""
+        else:
+            exe, params = sys.executable, "-m k_optimizer"
+        if ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1) > 32:
+            self._close()  # the elevated copy takes over; declining the UAC prompt keeps this one open
 
     def _throttle(self, snap: Snapshot, kind: str) -> list[str]:
         exclude = throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
