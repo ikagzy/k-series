@@ -50,3 +50,12 @@ def test_snapshot_skips_processes_that_vanish_and_keeps_denied_ones(monkeypatch)
     assert set(pids) == {1, 2}
     assert pids[2].exe is None and pids[2].cmdline == ()
     assert pids[2].rss_bytes == 0
+
+
+def test_snapshot_after_waits_then_snapshots(monkeypatch):
+    slept = []
+    monkeypatch.setattr(monitor.time, "sleep", slept.append)
+    monkeypatch.setattr(monitor.gpu, "read_gpu", lambda: None)
+    s = monitor.snapshot_after(0.25)
+    assert slept == [0.25]
+    assert os.getpid() in {p.pid for p in s.processes}

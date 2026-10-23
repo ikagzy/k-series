@@ -48,7 +48,7 @@ def _in_windows_dir(exe: str) -> bool:
 
 
 def classify(p: ProcInfo, known: KnownApps, own_pids: frozenset[int]) -> Level:
-    if p.pid in own_pids or p.exe is None or _in_windows_dir(p.exe):
+    if p.pid in own_pids or not p.exe or not os.path.isabs(p.exe) or _in_windows_dir(p.exe):
         return Level.PROTECTED
     name = p.name.lower()
     if name in _PROTECTED_NAMES:

@@ -66,3 +66,8 @@ def test_corrupt_builtin_raises(tmp_path):
     b.write_text("nope")
     with pytest.raises(ValueError):
         KnownApps.load(b, None)
+
+
+@pytest.mark.parametrize("exe", ["", "MemCompression"])
+def test_non_absolute_or_empty_exe_is_protected(known, exe):
+    assert classify(proc("MemCompression", exe), known, frozenset()) is Level.PROTECTED

@@ -1,3 +1,4 @@
+import time
 from collections.abc import Callable
 
 import psutil
@@ -9,8 +10,8 @@ _ATTRS = ["pid", "name", "exe", "cmdline", "create_time", "memory_info"]
 _CPUS = psutil.cpu_count() or 1
 
 
-def snapshot(read_gpu_fn: Callable[[], gpu.GpuReading | None] = gpu.read_gpu) -> Snapshot:
-    reading = read_gpu_fn()
+def snapshot(read_gpu_fn: Callable[[], gpu.GpuReading | None] | None = None) -> Snapshot:
+    reading = (read_gpu_fn or gpu.read_gpu)()
     procs: list[ProcInfo] = []
     for p in psutil.process_iter(_ATTRS, ad_value=None):
         try:
@@ -45,3 +46,15 @@ def snapshot(read_gpu_fn: Callable[[], gpu.GpuReading | None] = gpu.read_gpu) ->
         adapters=reading.adapters if reading else (),
         processes=tuple(procs),
     )
+
+
+def snapshot_after(interval: float = 0.5) -> Snapshot:
+    """Prime per-process CPU counters, wait, then snapshot so CPU values are real."""
+    psutil.cpu_percent(None)
+    for p in psutil.process_iter():
+        try:
+            p.cpu_percent(None)
+        except psutil.Error:
+            pass
+    time.sleep(interval)
+    return snapshot()

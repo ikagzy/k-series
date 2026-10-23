@@ -76,7 +76,7 @@ def read_gpu() -> GpuReading | None:
     try:
         run = subprocess.run(
             ["powershell", "-NoProfile", "-Command", _SCRIPT],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=20,
         )
         if run.returncode != 0:
             return None
