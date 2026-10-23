@@ -117,3 +117,43 @@ def test_safe_targets_resource_filters(known):
     assert safe_targets(allp, known, frozenset(), resource="ram") == allp
     assert safe_targets(allp, known, frozenset(), resource="cpu") == [busy_cpu]
     assert safe_targets(allp, known, frozenset(), resource="gpu") == [busy_gpu, big_vram]
+
+
+EDGE = "C:" + BS + "Program Files (x86)" + BS + "Microsoft" + BS + "Edge" + BS + "Application" + BS + "msedge.exe"
+WEBVIEW = ("C:" + BS + "Program Files (x86)" + BS + "Microsoft" + BS + "EdgeWebView" + BS
+           + "Application" + BS + "155.0" + BS + "msedgewebview2.exe")
+
+
+@pytest.fixture
+def known_edge(tmp_path):
+    f = tmp_path / "e.json"
+    f.write_text(json.dumps({"safe": ["msedge.exe", "m365copilot.exe", "msedgewebview2.exe"]}))
+    return KnownApps.load(f, None)
+
+
+def test_background_edge_and_copilot_are_safe(known_edge):
+    assert classify(proc("msedge.exe", EDGE), known_edge, frozenset()) is Level.SAFE
+    assert classify(proc("M365Copilot.exe", WINAPPS + "M365Copilot.exe"), known_edge, frozenset()) is Level.SAFE
+
+
+def test_webview2_runtime_is_never_safe_even_if_listed(known_edge):
+    # WhatsApp Desktop and other apps run on the shared WebView2 runtime
+    assert classify(proc("msedgewebview2.exe", WEBVIEW), known_edge, frozenset()) is Level.UNKNOWN
+
+
+def test_edge_in_use_with_visible_window_is_left_alone(known_edge):
+    main = proc("msedge.exe", EDGE, pid=1)
+    helper = proc("msedge.exe", EDGE, pid=2)
+    assert safe_targets([main, helper], known_edge, frozenset()) == [main, helper]
+    assert safe_targets([main, helper], known_edge, frozenset(), windowed_pids=frozenset({1})) == []
+
+
+def test_visible_window_of_another_app_does_not_block_edge_cleanup(known_edge):
+    main = proc("msedge.exe", EDGE, pid=1)
+    assert safe_targets([main], known_edge, frozenset(), windowed_pids=frozenset({555})) == [main]
+
+
+def test_builtin_list_has_edge_and_copilot_but_not_webview2():
+    k = KnownApps.load(_BUILTIN, None)
+    assert k.is_safe("msedge.exe") and k.is_safe("m365copilot.exe") and k.is_safe("copilot.exe")
+    assert not k.is_safe("msedgewebview2.exe")

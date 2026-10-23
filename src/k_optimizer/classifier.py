@@ -56,9 +56,15 @@ def _in_windows_dir(exe: str) -> bool:
 
 
 def _in_windows_components_dir(exe: str) -> bool:
-    """Where Windows' own optional components live: the Windows dir or the packaged-apps dir."""
+    """Where Microsoft's own optional components live: Windows, packaged apps, and the Edge browser dir.
+
+    The shared WebView2 runtime (EdgeWebView) is deliberately not here: other apps depend on it.
+    """
     apps = os.path.join(os.environ.get("ProgramFiles", "C:" + chr(92) + "Program Files"), "WindowsApps")
-    return _in_windows_dir(exe) or _under(exe, apps)
+    edge = os.path.join(
+        os.environ.get("ProgramFiles(x86)", "C:" + chr(92) + "Program Files (x86)"), "Microsoft", "Edge", "Application"
+    )
+    return _in_windows_dir(exe) or _under(exe, apps) or _under(exe, edge)
 
 
 def classify(p: ProcInfo, known: KnownApps, own_pids: frozenset[int]) -> Level:
@@ -85,7 +91,20 @@ def _uses(p: ProcInfo, resource: str | None) -> bool:
 
 
 def safe_targets(
-    procs: Iterable[ProcInfo], known: KnownApps, own_pids: frozenset[int], resource: str | None = None
+    procs: Iterable[ProcInfo],
+    known: KnownApps,
+    own_pids: frozenset[int],
+    resource: str | None = None,
+    windowed_pids: frozenset[int] = frozenset(),
 ) -> list[ProcInfo]:
-    """Processes a boost may close: only SAFE ones, optionally those using `resource` (cpu/ram/gpu)."""
-    return [p for p in procs if classify(p, known, own_pids) is Level.SAFE and _uses(p, resource)]
+    """Processes a boost may close: only SAFE ones, optionally those using `resource` (cpu/ram/gpu).
+
+    An app that owns a visible window (e.g. Edge the user is browsing in) is left alone entirely,
+    helper processes included; only its windowless background instances are closed.
+    """
+    procs = list(procs)
+    in_use = {p.name.lower() for p in procs if p.pid in windowed_pids}
+    return [
+        p for p in procs
+        if classify(p, known, own_pids) is Level.SAFE and p.name.lower() not in in_use and _uses(p, resource)
+    ]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, monitor, trimmer
+from k_optimizer import classifier, monitor, trimmer, winutil
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Level, ProcInfo, Snapshot
 
@@ -69,7 +69,7 @@ def main(
 
     snap = snapshot_fn()
     if args.cmd == "boost":
-        targets = classifier.safe_targets(snap.processes, known, own_pids())
+        targets = classifier.safe_targets(snap.processes, known, own_pids(), None, winutil.visible_window_pids())
         if targets:
             r = cleaner.close(targets)
             freed = sum(p.rss_bytes for p in r.closed)

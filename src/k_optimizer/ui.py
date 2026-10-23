@@ -5,7 +5,7 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, cli, monitor, throttle, trimmer
+from k_optimizer import classifier, cli, monitor, throttle, trimmer, winutil
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
 
@@ -206,7 +206,9 @@ class App(tk.Tk):
             return
         before = psutil.virtual_memory().available
         parts = []
-        targets = classifier.safe_targets(snap.processes, self._known, cli.own_pids(), resource)
+        targets = classifier.safe_targets(
+            snap.processes, self._known, cli.own_pids(), resource, winutil.visible_window_pids()
+        )
         if targets:
             r = self._cleaner.close(targets)
             if r.closed:
