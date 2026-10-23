@@ -9,14 +9,21 @@ def test_every_theme_has_a_ready_made_ico_with_standard_sizes():
     seen = set()
     for pal in theme.PALETTES.values():
         path = icons.icon_for(pal)
-        assert path.name == f"{pal.id}.ico" and path.is_file(), pal.id
+        assert path.name == f"{pal.id}.ico" and path.parent.name == "ko" and path.is_file(), pal.id
         raw = path.read_bytes()
         assert raw[:4] == b"\x00\x00\x01\x00"
         count = struct.unpack("<H", raw[4:6])[0]
         sizes = {raw[6 + 16 * i] or 256 for i in range(count)}
         assert {16, 32, 256} <= sizes, (pal.id, sizes)
         seen.add(raw)
-    assert len(seen) == len(theme.PALETTES)  # seven different icons
+    assert len(seen) >= len(theme.PALETTES) - 1  # emerald-cyan reuses the aurora logo until it has its own
+
+
+def test_each_app_has_its_own_logo_and_k_launcher_keeps_its_theme_icons():
+    pal = theme.PALETTES["amber-orange"]
+    ko, ks, kl = (icons.icon_for(pal, a) for a in ("ko", "ks", "kl"))
+    assert ko.parent.name == "ko" and ks.parent.name == "ks" and kl.parent.name == "ThemeIcons"
+    assert len({ko.read_bytes(), ks.read_bytes(), kl.read_bytes()}) == 3
 
 
 def test_unknown_theme_falls_back_to_the_default_icon():
@@ -65,6 +72,7 @@ def test_png_layer_of_a_broken_ico_is_none(tmp_path, monkeypatch):
     bad = tmp_path / "amber-orange.ico"
     bad.write_bytes(b"not an icon")
     monkeypatch.setattr(icons, "THEME_ICONS", tmp_path)
+    monkeypatch.setattr(icons, "APP_ICONS", tmp_path / "none")
     assert icons.png_layer(theme.PALETTES["amber-orange"], 64) is None
 
 

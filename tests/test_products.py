@@ -86,13 +86,13 @@ def test_update_settings_have_safe_defaults_and_can_be_overridden(tmp_path):
     assert settings.repo("k-launcher", f) == "ikagzy/k-launcher"
     settings.save({"repos": {"k-launcher": "someone/else"}}, f)
     assert settings.repo("k-launcher", f) == "someone/else"
-    assert settings.repo("k-optimizer", f) == "ikagzy/k-optimizer"
-    assert settings.repo("k-series", f) == "ikagzy/k-optimizer"
+    assert settings.repo("k-optimizer", f) == "ikagzy/k-series"
+    assert settings.repo("k-series", f) == "ikagzy/k-series"
 
 
 def test_malformed_repo_setting_falls_back_to_the_default(tmp_path):
     f = tmp_path / "s.json"
     settings.save({"repos": {"k-launcher": "../../etc", "k-series": 42}, "auto_check": "yes"}, f)
     assert settings.repo("k-launcher", f) == "ikagzy/k-launcher"
-    assert settings.repo("k-series", f) == "ikagzy/k-optimizer"
+    assert settings.repo("k-series", f) == "ikagzy/k-series"
     assert settings.flag("auto_check", True, f) is True

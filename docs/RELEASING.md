@@ -10,7 +10,7 @@ GitHub'a koyup bir sürüm etiketi atınca GitHub Actions exe'yi senin yerine de
    "Değiştir" ile depoyu seç).
 2. Bu klasör zaten bir git deposu. Uzak depoyu bağla ve it:
    ```
-   git remote add origin https://github.com/ikagzy/k-optimizer.git
+   git remote add origin https://github.com/ikagzy/k-series.git
    git push -u origin master
    ```
    `.github/workflows/release.yml` iş akışı depoyla birlikte gider.
@@ -42,7 +42,7 @@ ile açar, kurulu değilse ya da eskiyse GitHub'dan yükler/günceller.
 | K-Optimizer | `K-Optimizer.exe` | Yerinde değiştirilir (eski kopya `.old`); yoksa `%LOCALAPPDATA%\Programs\K-Optimizer` |
 | K-Series | `K-Series.exe` | Çalışan exe yeniden adlandırılır, yenisi yerine konur |
 
-K-Optimizer ve K-Series aynı depodan (`ikagzy/k-optimizer`) gelir; bir etiketle ikisinin exe'si de yayınlanır ve her
+K-Optimizer ve K-Series aynı depodan (`ikagzy/k-series`) gelir; bir etiketle ikisinin exe'si de yayınlanır ve her
 ürün kendi dosyasını seçer. Ayarlar'dan her ürünün deposunu ayrı seçebilirsin. Exe'lerin sürümü derleme sırasında
 dosyaya gömülür (`tools/make_version.py`); K-Series kurulu K-Optimizer'ın sürümünü buradan okur.
 

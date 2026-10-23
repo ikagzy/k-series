@@ -27,6 +27,7 @@ _THEME_POLL_MS = 2000
 _ITCH = "https://itzkagzy.itch.io/k-launcher"
 _NAV = (("home", "Ana Sayfa"), ("k-optimizer", "K-Optimizer"), ("k-launcher", "K-Launcher"), ("settings", "Ayarlar"))
 _PRODUCTS = ("k-optimizer", "k-launcher")
+_LOGO_SETS = {"k-launcher": "kl", "k-optimizer": "ko", "k-series": "ks"}
 _NAMES = {"k-launcher": "K-Launcher", "k-optimizer": "K-Optimizer", "k-series": "K-Series"}
 _EXE = {"k-launcher": klauncher.EXE_NAME, "k-optimizer": klauncher.OPTIMIZER_EXE}
 _SAVED_KEY = {"k-launcher": "launcher_path", "k-optimizer": "optimizer_path"}
@@ -47,7 +48,7 @@ class KSeriesApp(tk.Tk):
         theme.set_launcher_hint(settings.launcher_path())
         self.pal = theme.load()
         self.motion = theme.motion_scale()
-        icons.apply_window_icon(self, self.pal)  # K-Launcher's own theme icon
+        icons.apply_window_icon(self, self.pal, "ks")  # the KS logo of the current theme
 
         self.canvas = tk.Canvas(self, width=_W, height=_H, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
@@ -98,7 +99,7 @@ class KSeriesApp(tk.Tk):
         """Recolour the window, the app icon and (if we made one) the desktop shortcut's icon."""
         self.pal = pal
         apply_window_theme(self, pal)
-        icons.apply_window_icon(self, pal)
+        icons.apply_window_icon(self, pal, "ks")
         self._refresh_shortcut()
 
     @staticmethod
@@ -113,7 +114,7 @@ class KSeriesApp(tk.Tk):
         lnk = self._saved_shortcut()
         if self._preview or lnk is None or not lnk.exists() or not getattr(sys, "frozen", False):
             return
-        icon = icons.shortcut_icon(self._icons_dir(), self.pal)
+        icon = icons.shortcut_icon(self._icons_dir(), self.pal, "ks")
         threading.Thread(target=shortcuts.create, args=(lnk, Path(sys.executable), icon), daemon=True).start()
 
     def _make_shortcut(self):
@@ -121,7 +122,7 @@ class KSeriesApp(tk.Tk):
             self._message = "Kısayol yalnızca exe sürümünde oluşturulur."
             return
         lnk = shortcuts.desktop_dir() / "K-Series.lnk"
-        icon = icons.shortcut_icon(self._icons_dir(), self.pal)
+        icon = icons.shortcut_icon(self._icons_dir(), self.pal, "ks")
         ok = shortcuts.create(lnk, Path(sys.executable), icon)
         if ok:
             settings.save({**settings.load(), "shortcut": str(lnk)})
@@ -349,9 +350,9 @@ class KSeriesApp(tk.Tk):
         self.canvas.create_polygon(round_rect_points(x0, y0, x1, y1, theme.RADIUS[3]), smooth=True,
                                    fill=p.card, outline=p.outline, width=1)
 
-    def _logo(self, x, y, size):
-        """The theme's K logo (K-Launcher's own icon artwork) at the given size."""
-        img = icons.photo(self, self.pal, size)
+    def _logo(self, x, y, size, pid: str = "k-series"):
+        """The product's logo in the current theme (KO, KL = K-Launcher's own ThemeIcons, KS) at the given size."""
+        img = icons.photo(self, self.pal, size, _LOGO_SETS.get(pid, "ks"))
         if img is not None:
             self.canvas.create_image(x, y, image=img, anchor="nw")
 
@@ -405,7 +406,7 @@ class KSeriesApp(tk.Tk):
         for i, prod in enumerate(self._products):
             x0, y0 = x + i * (card_w + gap), 120
             self._card(x0, y0, x0 + card_w, y0 + card_h)
-            self._logo(x0 + 24, y0 + 24, 64)
+            self._logo(x0 + 24, y0 + 24, 64, prod.id)
             c.create_text(x0 + 108, y0 + 40, anchor="w", text=prod.name, fill=theme.TEXT,
                           font=self._font(18, True, True))
             c.create_text(x0 + 108, y0 + 68, anchor="w", text=prod.tagline, fill=theme.TEXT_MUTED,
@@ -462,7 +463,7 @@ class KSeriesApp(tk.Tk):
             return
         x0, y0, x1, y1 = _SIDEBAR + 40, 120, _W - 40, 120 + 360
         self._card(x0, y0, x1, y1)
-        self._logo(x0 + 28, y0 + 28, 128)
+        self._logo(x0 + 28, y0 + 28, 128, pid)
         c.create_text(x0 + 186, y0 + 60, anchor="w", text=prod.name, fill=theme.TEXT, font=self._font(22, True, True))
         self._status(x0 + 186, y0 + 98, prod)
         st, has_update = self._update_state(pid)

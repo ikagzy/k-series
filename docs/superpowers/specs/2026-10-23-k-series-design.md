@@ -50,7 +50,7 @@ Algılama ve tema yolları geçici klasörlerle test edilir; arayüz sayfaları 
 
 K-Series, K-Launcher ve K-Optimizer'ın güncellemelerini GitHub Releases'ten denetler ve kurar.
 
-**Kaynak:** Her ürün için GitHub deposunun en son release'i (`/repos/{depo}/releases/latest`). Varsayılan depolar `ikagzy/k-launcher` ve `ikagzy/k-optimizer`; ayarlardan değiştirilebilir. Release henüz yoksa hata değil "yayın yok" durumudur.
+**Kaynak:** Her ürün için GitHub deposunun en son release'i (`/repos/{depo}/releases/latest`). Varsayılan depolar `ikagzy/k-launcher` ve `ikagzy/k-series`; ayarlardan değiştirilebilir. Release henüz yoksa hata değil "yayın yok" durumudur.
 
 **Varlıklar (asset):** K-Launcher için tek parça taşınabilir `KLauncher*.exe` (K-Launcher kendini kuran tek exe olarak dağıtılıyor); K-Optimizer için `K-Series*.exe` (K-Optimizer K-Series'in içinde yerleşiktir, bu yüzden K-Optimizer güncellemesi = K-Series güncellemesi).
 

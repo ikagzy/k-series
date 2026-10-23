@@ -316,7 +316,7 @@ def test_theme_change_rewrites_the_shortcut_icon_only_if_we_made_a_shortcut(ks, 
     ksettings.save({**ksettings.load(), "shortcut": str(lnk)})
     assert click(ks, ("theme", "aurora"))
     assert pump(ks, lambda: made)
-    assert made[0][0] == lnk and "aurora.ico" in str(made[0][1])
+    assert made[0][0] == lnk and "aurora-ks.ico" in str(made[0][1])
     assert made[0][1].exists()  # the themed .ico was generated for it
 
 
@@ -329,7 +329,7 @@ def test_creating_the_shortcut_saves_its_path_and_uses_the_themed_icon(ks, monke
     ks._goto("home")
     ks._draw()
     assert click(ks, ("shortcut", ""))
-    assert made[0][0] == tmp_path / "K-Series.lnk" and f"{ks.pal.id}.ico" in str(made[0][1])
+    assert made[0][0] == tmp_path / "K-Series.lnk" and f"{ks.pal.id}-ks.ico" in str(made[0][1])
     assert ksettings.load()["shortcut"] == str(tmp_path / "K-Series.lnk")
     assert "hazır" in ks._message
 
