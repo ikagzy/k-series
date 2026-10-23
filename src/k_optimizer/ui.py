@@ -3,13 +3,14 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, cli, monitor, ramclean, theme, throttle, winutil
+from k_optimizer import classifier, cli, monitor, probalance, ramclean, theme, throttle, winutil
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
 
@@ -102,6 +103,9 @@ class App(tk.Tk):
         self._own = cli.own_pids()
         self._last_fg: int | None = None
         self._ramcleaner = ramclean.RamCleaner()
+        self._balancer = probalance.ProBalance(self._throttler, self._classify, self._own)
+        self._auto_balance = False
+        self._last_tick_snap: Snapshot | None = None
         self._is_admin = self._ramcleaner._ops.is_admin()
         self._ram_busy = False
         self._ram_again = False
@@ -221,13 +225,15 @@ class App(tk.Tk):
             c.create_text(cx, cy + 40, text="%", fill=p.secondary, font=self._font(13, True, True))
         c.create_text(cx, y0 + 282, text=g.label, fill=theme.TEXT, font=self._font(15, True, True))
         c.create_text(cx, y0 + 304, text=g.sub, fill=theme.TEXT_MUTED, font=self._font(10))
-        self._draw_button(g.key, cx, y1 - 36)
+        self._draw_button(g.key, cx, y1 - 36, active=g.key == "cpu" and self._auto_balance)
 
-    def _draw_button(self, key: str, cx: float, cy: float):
+    def _draw_button(self, key: str, cx: float, cy: float, active: bool = False):
         c, p = self.canvas, self.pal
         r = 26
         hover = self._hover == key
-        fill = theme.blend(p.background, p.primary, 0.30 if hover else 0.14)
+        fill = theme.blend(p.background, p.primary, 0.45 if active else 0.30 if hover else 0.14)
+        if active:  # toggle is on: soft halo in the secondary colour
+            c.create_oval(cx - r - 6, cy - r - 6, cx + r + 6, cy + r + 6, outline=p.secondary, width=2)
         c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=fill, outline=p.primary, width=2)
         ox, oy = cx - 32, cy - 32  # broom drawn in a 64x64 box
         c.create_line(ox + 44, oy + 14, ox + 31, oy + 33, fill=theme.TEXT, width=4, capstyle="round")
@@ -278,8 +284,27 @@ class App(tk.Tk):
             snap = self._snap
         if snap is not None:
             for key, (pct, sub) in summarize(snap).items():
+                if key == "cpu" and self._auto_balance:
+                    held = len(self._throttler.pending_pids("cpu"))
+                    sub += f" · oto denge açık" + (f" · {held} yavaşlatıldı" if held else "")
                 self._gauges[key].set(pct, sub)
+            if self._auto_balance and snap is not self._last_tick_snap:
+                self._last_tick_snap = snap
+                self._balance(snap)
         self.after(_INTERVAL_MS, self._poll)
+
+    def _foreground_group(self) -> frozenset[int]:
+        return throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
+
+    def _balance(self, snap: Snapshot):
+        report = self._balancer.tick(time.monotonic(), snap, self._foreground_group())
+        if report.restrained:
+            names = ", ".join(sorted({p.name for p in report.restrained}))
+            self._result, self._result_ok = f"Otomatik denge: {names} arka planda yavaşlatıldı", True
+        elif report.released:
+            self._result, self._result_ok = "Otomatik denge: öncelikler eski haline getirildi", False
+        if report.restrained or report.released:
+            self._refresh_undo()
 
     def _track_foreground(self):
         # Remember the last app the user was in that is not us, so a game they alt-tabbed from stays untouched.
@@ -292,11 +317,28 @@ class App(tk.Tk):
     def _clean(self, resource: str):
         if resource == "ram":
             return self._clean_ram()
+        if resource == "cpu":
+            return self._toggle_auto_balance()
         with self._lock:
             snap = self._snap
         if snap is None:
             return
         self._show(self._close_safe(snap, resource) + self._throttle(snap, resource))
+
+    def _toggle_auto_balance(self):
+        if self._auto_balance:
+            self._auto_balance = False
+            n = self._balancer.release_all()
+            self._show([f"Otomatik CPU dengeleme kapatıldı · {n} sürecin önceliği eski haline getirildi"])
+            self._result_ok = False
+            return
+        self._auto_balance = True
+        with self._lock:
+            snap = self._snap
+        parts = self._close_safe(snap, "cpu") if snap is not None else []
+        parts.insert(0, "Otomatik CPU dengeleme açıldı: sistem yüklenince arka planda CPU yiyenler yavaşlatılır, "
+                        "ön plandaki uygulamaya dokunulmaz")
+        self._show(parts)
 
     def _close_safe(self, snap: Snapshot, resource: str) -> list[str]:
         parts = []
@@ -333,7 +375,8 @@ class App(tk.Tk):
     def _ram_job(self, snap: Snapshot):
         try:
             parts = self._close_safe(snap, "ram")
-            report = self._ramcleaner.clean([p.pid for p in snap.processes])
+            exclude = throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
+            report = self._ramcleaner.clean(ramclean.cold_pids(snap.processes, exclude, self._own))
             parts.insert(0, report.summary())
         except Exception as e:  # never let a failed step kill the worker silently
             parts = [f"RAM temizliği hata verdi: {e}"]
@@ -361,6 +404,7 @@ class App(tk.Tk):
     def _restore(self):
         if not self._cleaner.pending() and not self._throttler.pending():
             return
+        self._auto_balance = False
         r = self._cleaner.restore()
         n = self._throttler.restore()
         text = f"Geri açıldı: {', '.join(r.started) or '-'}"
@@ -384,6 +428,7 @@ class App(tk.Tk):
 
     def _close(self):
         self._stop.set()
+        self._balancer.release_all()  # never leave processes slowed down after we exit
         self.destroy()
 
 

@@ -142,13 +142,14 @@ def pick_background(
     own_pids: frozenset[int],
     exclude_pids: frozenset[int],
     kind: str,
+    min_cpu: float = CPU_MIN_PERCENT,
 ) -> list[ProcInfo]:
     out = []
     for p in procs:
         if p.pid in own_pids or p.pid in exclude_pids or classify(p) is Level.PROTECTED:
             continue
         gpu = p.gpu_percent or 0.0
-        if kind == "cpu" and p.cpu_percent >= CPU_MIN_PERCENT and gpu < GAME_LIKE_GPU_PERCENT:
+        if kind == "cpu" and p.cpu_percent >= min_cpu and gpu < GAME_LIKE_GPU_PERCENT:
             out.append(p)
         elif kind == "gpu" and gpu >= GPU_MIN_PERCENT:
             out.append(p)
@@ -236,10 +237,18 @@ class Throttler:
             self._save(self._load() + new)
         return ThrottleReport(tuple(applied), tuple(skipped))
 
-    def restore(self) -> int:
+    def pending_pids(self, kind: str | None = None) -> set[int]:
+        return {r.pid for r in self._load() if kind is None or r.kind == kind}
+
+    def restore(self, kind: str | None = None, pids: set[int] | None = None) -> int:
+        """Put back recorded values; limit to one kind and/or some pids, the rest stay recorded."""
         ops = self._ops
         restored = 0
+        keep: list[Record] = []
         for r in self._load():
+            if (kind is not None and r.kind != kind) or (pids is not None and r.pid not in pids):
+                keep.append(r)
+                continue
             ct = ops.create_time(r.pid)
             if ct is None or abs(ct - r.create_time) > 0.01:
                 continue  # gone, or the pid now belongs to someone else
@@ -250,5 +259,5 @@ class Throttler:
             else:
                 ok = ops.set_gpu(r.pid, r.prev)
             restored += bool(ok)
-        self._save([])
+        self._save(keep)
         return restored

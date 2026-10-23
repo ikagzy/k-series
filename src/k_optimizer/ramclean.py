@@ -24,6 +24,12 @@ PURGE_LOW_STANDBY = 5
 
 LOW_MEMORY_FRACTION = 0.10
 _SYSTEM_MEMORY_LIST_INFORMATION = 80
+# Measured on a real machine: trimming processes that are active (cpu >= 0.1%) hands the memory back within
+# seconds (they fault it straight in again, 178% of what was trimmed), while idle ones keep ~80% of it freed.
+COLD_CPU_PERCENT = 0.1
+COLD_GPU_PERCENT = 0.5
+COLD_MIN_RSS = 8 * 1024 * 1024
+_NEVER_TRIM = frozenset({"memcompression", "system", "registry", "secure system"})
 _STEP_LABELS = {
     "working_sets": "çalışma kümeleri",
     "file_cache": "sistem önbelleği",
@@ -31,6 +37,17 @@ _STEP_LABELS = {
     "low_standby": "düşük öncelikli bekleme listesi",
     "standby": "bekleme listesi",
 }
+
+
+def cold_pids(procs, exclude_pids=frozenset(), own_pids=frozenset()) -> list[int]:
+    """Idle background processes worth trimming: the freed memory stays freed."""
+    return [
+        p.pid for p in procs
+        if p.pid not in exclude_pids and p.pid not in own_pids
+        and p.name.lower() not in _NEVER_TRIM
+        and p.cpu_percent < COLD_CPU_PERCENT and (p.gpu_percent or 0) < COLD_GPU_PERCENT
+        and p.rss_bytes >= COLD_MIN_RSS
+    ]
 
 
 class _Luid(ctypes.Structure):
@@ -128,7 +145,8 @@ class RamReport:
     def summary(self) -> str:
         done = [_STEP_LABELS[k] for k, ok in self.steps.items() if ok]
         failed = [_STEP_LABELS[k] for k, ok in self.steps.items() if not ok]
-        text = f"~{self.freed_bytes / 1024**2:.0f} MB RAM boşaldı · temizlenen: {', '.join(done) or '-'}"
+        text = (f"~{self.freed_bytes / 1024**2:.0f} MB RAM boşaldı ({self.trimmed} boşta süreç) "
+                f"· temizlenen: {', '.join(done) or '-'}")
         if failed:
             text += f" · başarısız: {', '.join(failed)}"
         if not self.admin:

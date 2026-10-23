@@ -7,8 +7,8 @@ from k_optimizer.models import ProcInfo, Snapshot
 BS = chr(92)
 
 
-def mk(pid, name, exe, rss=50 * 1024 * 1024):
-    return ProcInfo(pid, name, exe, (exe,), 1.0, 1.5, rss, None, None)
+def mk(pid, name, exe, rss=50 * 1024 * 1024, cpu=1.5):
+    return ProcInfo(pid, name, exe, (exe,), 1.0, cpu, rss, None, None)
 
 
 SNAP = Snapshot(
@@ -17,6 +17,7 @@ SNAP = Snapshot(
         mk(1, "lsass.exe", "C:" + BS + "Windows" + BS + "System32" + BS + "lsass.exe"),
         mk(2, "CompatTelRunner.exe", "C:" + BS + "Windows" + BS + "System32" + BS + "CompatTelRunner.exe"),
         mk(3, "random.exe", "D:" + BS + "r" + BS + "random.exe"),
+        mk(4, "idle.exe", "D:" + BS + "i" + BS + "idle.exe", cpu=0.0),
     ),
 )
 
@@ -85,7 +86,7 @@ def test_boost_closes_only_windows_components_and_trims_without_prompt(capsys, t
     trimmed = []
     assert run(["boost"], c, tmp_path, trim=lambda pids: trimmed.append(list(pids)) or 5) == 0
     assert c.closed == [2]
-    assert trimmed and 3 in trimmed[0]
+    assert trimmed == [[4]]  # only the idle process; active ones would just fault their memory back in
     out = capsys.readouterr().out
     assert "CompatTelRunner.exe" in out
 

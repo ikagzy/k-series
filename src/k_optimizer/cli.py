@@ -5,7 +5,7 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, monitor, trimmer, winutil
+from k_optimizer import classifier, monitor, ramclean, throttle, trimmer, winutil
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Level, ProcInfo, Snapshot
 
@@ -78,7 +78,9 @@ def main(
                 print(f"Atlanan: {p.name} ({why})")
         else:
             print("Kapatılacak gereksiz Windows bileşeni yok.")
-        print(f"Bellek sıkıştırılan süreç: {trim_fn([p.pid for p in snap.processes])}")
+        fg = throttle.foreground_pid()
+        cold = ramclean.cold_pids(snap.processes, throttle.related_pids(fg) if fg else frozenset(), own_pids())
+        print(f"Bellek sıkıştırılan boşta süreç: {trim_fn(cold)}")
         return 0
     listed = [(p, classify(p)) for p in snap.processes]
     listed = [(p, lv) for p, lv in listed if lv is not Level.PROTECTED]

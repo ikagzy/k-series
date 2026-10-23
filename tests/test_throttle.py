@@ -155,3 +155,22 @@ def test_real_ops_roundtrip_on_own_process():
     assert ops.set_gpu(pid, 1) and ops.get_gpu(pid) == 1
     assert ops.set_cpu(pid, before_cpu) and ops.set_gpu(pid, before_gpu)
     assert ops.get_cpu(pid) == before_cpu and ops.get_gpu(pid) == before_gpu
+
+
+def test_restore_can_be_limited_to_one_kind_and_keeps_the_rest(tmp_path):
+    ops = FakeOps(cts={1: 1.0, 2: 1.0}, cpu={1: NORMAL}, gpu={2: 3})
+    t = throttle.Throttler(tmp_path / "t.json", ops)
+    t.apply([mk(1)], "cpu")
+    t.apply([mk(2)], "gpu")
+    assert t.restore(kind="cpu") == 1
+    assert ops.cpu[1] == NORMAL and ops.gpu[2] == 1  # gpu throttle untouched
+    assert t.pending() == 1 and t.pending_pids("gpu") == {2}
+
+
+def test_restore_can_be_limited_to_given_pids(tmp_path):
+    ops = FakeOps(cts={1: 1.0, 2: 1.0}, cpu={1: NORMAL, 2: NORMAL})
+    t = throttle.Throttler(tmp_path / "t.json", ops)
+    t.apply([mk(1), mk(2)], "cpu")
+    assert t.restore(kind="cpu", pids={1}) == 1
+    assert ops.cpu[1] == NORMAL and ops.cpu[2] == BELOW
+    assert t.pending_pids("cpu") == {2}

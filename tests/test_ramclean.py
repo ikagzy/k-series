@@ -126,3 +126,28 @@ def test_privilege_enabling_that_raises_degrades_to_working_sets_only():
     rep = ramclean.RamCleaner(ops).clean([1])
     assert ops.calls == ["privileges", "working_sets"]
     assert rep.steps == {"working_sets": True}
+
+
+def _p(pid, name="app.exe", cpu=0.0, gpu=None, rss=50 * 1024 * 1024):
+    from k_optimizer.models import ProcInfo
+
+    return ProcInfo(pid, name, "D:" + chr(92) + name, (), 1.0, cpu, rss, gpu, None)
+
+
+def test_cold_pids_picks_only_idle_background_processes_with_real_memory():
+    procs = [
+        _p(1),                          # idle, big -> picked
+        _p(2, cpu=0.5),                 # active: would just fault straight back in
+        _p(3, gpu=3.0),                 # using the GPU
+        _p(4, rss=2 * 1024 * 1024),     # too small to matter
+        _p(5),                          # foreground tree
+        _p(6),                          # ours
+        _p(7, name="MemCompression"),   # the system compression store, trimming it just refills it
+    ]
+    got = ramclean.cold_pids(procs, exclude_pids=frozenset({5}), own_pids=frozenset({6}))
+    assert got == [1]
+
+
+def test_summary_mentions_how_many_idle_processes_were_trimmed():
+    rep = ramclean.RamCleaner(FakeOps(admin=True)).clean([1, 2, 3])
+    assert "3 boşta süreç" in rep.summary()
