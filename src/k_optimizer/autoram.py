@@ -1,24 +1,16 @@
-"""When to clean RAM on its own: memory use at or above a threshold, never more often than the interval, and
-backing off while cleaning achieves nothing (so an idle, already-lean system is not trimmed over and over)."""
+"""Continuous RAM cleaning: one clean every `interval` seconds for as long as it is switched on.
 
-_NEGLIGIBLE = 64 * 1024 * 1024  # freeing less than this counts as "nothing worth repeating"
+It is safe to run this often because each clean only trims idle background processes (see ramclean.cold_pids),
+which is cheap and never touches what the user is working in."""
 
 
 class AutoRam:
-    def __init__(self, threshold: float = 80.0, min_interval: float = 60.0, max_interval: float = 600.0):
-        self.threshold = threshold
-        self.min_interval, self.max_interval = min_interval, max_interval
-        self._interval = min_interval
+    def __init__(self, interval: float = 10.0):
+        self.interval = interval
         self._last: float | None = None
 
-    def due(self, now: float, used_percent: float) -> bool:
-        if used_percent < self.threshold:
-            return False
-        return self._last is None or now - self._last >= self._interval
+    def due(self, now: float) -> bool:
+        return self._last is None or now - self._last >= self.interval
 
-    def record(self, now: float, freed_bytes: int) -> None:
+    def record(self, now: float) -> None:
         self._last = now
-        if freed_bytes < _NEGLIGIBLE:
-            self._interval = min(self._interval * 2, self.max_interval)
-        else:
-            self._interval = self.min_interval

@@ -3,8 +3,9 @@ import json
 import os
 from pathlib import Path
 
-THRESHOLDS = (70, 80, 90)
-_DEFAULTS = {"auto_ram": False, "auto_ram_threshold": 80}
+INTERVALS = (5, 10, 30, 60)  # seconds between automatic cleans
+DEFAULT_INTERVAL = 10
+_DEFAULTS = {"auto_ram": False, "auto_ram_interval": DEFAULT_INTERVAL}
 
 
 def default_path() -> Path:
@@ -21,9 +22,9 @@ def load(path: Path | None = None) -> dict:
     out = dict(_DEFAULTS)
     if isinstance(data.get("auto_ram"), bool):
         out["auto_ram"] = data["auto_ram"]
-    t = data.get("auto_ram_threshold")
-    if isinstance(t, int) and not isinstance(t, bool) and 60 <= t <= 95:
-        out["auto_ram_threshold"] = t
+    t = data.get("auto_ram_interval")
+    if isinstance(t, int) and not isinstance(t, bool) and t in INTERVALS:
+        out["auto_ram_interval"] = t
     return out
 
 
@@ -39,7 +40,7 @@ def save(values: dict, path: Path | None = None) -> bool:
         return False
 
 
-def next_threshold(current: int) -> int:
-    if current in THRESHOLDS:
-        return THRESHOLDS[(THRESHOLDS.index(current) + 1) % len(THRESHOLDS)]
-    return THRESHOLDS[0]
+def next_interval(current: int) -> int:
+    if current in INTERVALS:
+        return INTERVALS[(INTERVALS.index(current) + 1) % len(INTERVALS)]
+    return DEFAULT_INTERVAL

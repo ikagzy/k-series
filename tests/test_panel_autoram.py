@@ -13,7 +13,7 @@ MB = 1024 * 1024
 
 
 class Env:
-    """A panel whose monitor reports the RAM use we choose, with a stand-in cleaner."""
+    """A panel whose monitor, clock and cleaner we control."""
 
     def __init__(self, panel, root, state):
         self.panel, self.root, self.state = panel, root, state
@@ -26,11 +26,15 @@ class Env:
             time.sleep(0.01)
         return False
 
-    def poll_with(self, used_pct):
-        """Publish a fresh snapshot at the given RAM use and run one poll."""
+    def poll_at(self, t, used_pct=40):
+        """Advance the fake clock to t, publish a fresh snapshot, run one poll."""
+        self.state["t"] = t
         total = 32 * GB
         self.panel._snap = Snapshot(5.0, int(total * used_pct / 100), total, (), ())
         self.panel._poll()
+
+    def settle(self):
+        assert self.pump(lambda: not self.panel._ram_busy)
 
     def click(self, name):
         for key, (x0, y0, x1, y1) in self.panel._regions:
@@ -43,9 +47,10 @@ class Env:
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.delenv("K_OPTIMIZER_PREVIEW", raising=False)
-    state = {"cleans": [], "freed": 300 * MB}
+    state = {"cleans": [], "freed": 300 * MB, "t": 0.0}
     steady = Snapshot(5.0, 8 * GB, 32 * GB, (), ())
     monkeypatch.setattr(ui.monitor, "snapshot_after", lambda interval=0.5: dataclasses.replace(steady))
+    monkeypatch.setattr(ui, "time", types.SimpleNamespace(monotonic=lambda: state["t"]))
 
     def fake_clean(self, pids):
         state["cleans"].append(list(pids))
@@ -69,11 +74,11 @@ def draw(e):
     e.panel._draw()
 
 
-def test_auto_ram_starts_off_with_the_default_threshold(env):
-    assert env.panel._auto_ram is False and env.panel._autoram.threshold == 80
+def test_auto_ram_starts_off_with_the_default_interval(env):
+    assert env.panel._auto_ram is False and env.panel._autoram.interval == 10
     draw(env)
     keys = [k for k, _ in env.panel._regions]
-    assert "auto-ram" in keys and "auto-thr" in keys
+    assert "auto-ram" in keys and "auto-int" in keys and "auto-thr" not in keys
 
 
 def test_the_toggle_turns_it_on_and_off_and_remembers_the_choice(env):
@@ -85,17 +90,18 @@ def test_the_toggle_turns_it_on_and_off_and_remembers_the_choice(env):
     assert env.panel._auto_ram is False and optsettings.load()["auto_ram"] is False
 
 
-def test_the_threshold_cycles_and_is_remembered(env):
+def test_the_interval_cycles_and_is_remembered(env):
     draw(env)
-    assert env.click("auto-thr")
-    assert env.panel._autoram.threshold == 90 and optsettings.load()["auto_ram_threshold"] == 90
-    draw(env)
-    assert env.click("auto-thr")
-    assert env.panel._autoram.threshold == 70 and optsettings.load()["auto_ram_threshold"] == 70
+    assert env.click("auto-int")
+    assert env.panel._autoram.interval == 30 and optsettings.load()["auto_ram_interval"] == 30
+    for expected in (60, 5, 10):
+        draw(env)
+        env.click("auto-int")
+        assert env.panel._autoram.interval == expected
 
 
 def test_a_saved_choice_is_restored_on_the_next_launch(monkeypatch):
-    optsettings.save({"auto_ram": True, "auto_ram_threshold": 70})
+    optsettings.save({"auto_ram": True, "auto_ram_interval": 30})
     monkeypatch.setattr(ui.monitor, "snapshot_after", lambda interval=0.5: Snapshot(5.0, 1, 2, (), ()))
     try:
         root = tk.Tk()
@@ -103,72 +109,88 @@ def test_a_saved_choice_is_restored_on_the_next_launch(monkeypatch):
         pytest.skip(f"no Tk display: {e}")
     panel = ui.OptimizerPanel(root, lambda: theme.PALETTES["aurora"], lambda: 1.0)
     try:
-        assert panel._auto_ram is True and panel._autoram.threshold == 70
+        assert panel._auto_ram is True and panel._autoram.interval == 30
     finally:
         panel.shutdown()
         root.destroy()
 
 
-def test_it_cleans_when_memory_use_reaches_the_threshold(env):
+def test_once_on_it_cleans_continuously_whatever_the_memory_use(env):
     draw(env)
     env.click("auto-ram")
-    env.poll_with(90)
-    assert env.pump(lambda: env.state["cleans"] and not env.panel._ram_busy)
+    for t, expected in ((0, 1), (4, 1), (10, 2), (14, 2), (20, 3), (30, 4)):
+        env.poll_at(t, used_pct=30)  # low use: it still cleans, there is no threshold
+        env.settle()
+        assert len(env.state["cleans"]) == expected, (t, expected)
+
+
+def test_a_longer_interval_cleans_less_often(env):
+    draw(env)
+    env.click("auto-int")  # 10 -> 30
+    draw(env)
+    env.click("auto-ram")
+    for t in (0, 10, 20, 29):
+        env.poll_at(t)
+        env.settle()
     assert len(env.state["cleans"]) == 1
-    assert "Otomatik" in env.panel._result and env.panel._result_ok is True
+    env.poll_at(30)
+    env.settle()
+    assert len(env.state["cleans"]) == 2
 
 
-def test_it_does_nothing_below_the_threshold_or_when_switched_off(env):
-    draw(env)
-    env.click("auto-ram")
-    env.poll_with(60)
+def test_it_does_nothing_while_switched_off(env):
+    for t in (0, 10, 20, 100):
+        env.poll_at(t, used_pct=99)
     env.pump(n=30)
     assert env.state["cleans"] == []
-    draw(env)
-    env.click("auto-ram")  # off again
-    env.poll_with(99)
-    env.pump(n=30)
-    assert env.state["cleans"] == []
-
-
-def test_it_waits_the_interval_instead_of_cleaning_on_every_poll(env):
-    draw(env)
-    env.click("auto-ram")
-    env.poll_with(95)
-    assert env.pump(lambda: len(env.state["cleans"]) == 1 and not env.panel._ram_busy)
-    for _ in range(5):
-        env.poll_with(95)
-    env.pump(n=30)
-    assert len(env.state["cleans"]) == 1
 
 
 def test_automatic_cleaning_only_trims_and_never_closes_anything(env, monkeypatch):
     draw(env)
     env.click("auto-ram")
     monkeypatch.setattr(env.panel, "_close_safe", lambda *a: (_ for _ in ()).throw(AssertionError("closed something")))
-    env.poll_with(95)
-    assert env.pump(lambda: env.state["cleans"] and not env.panel._ram_busy)
-    assert env.panel._result_ok is True  # the clean itself worked; no AssertionError was swallowed
+    env.poll_at(0)
+    env.settle()
+    assert len(env.state["cleans"]) == 1 and "hata verdi" not in env.panel._result
 
 
-def test_a_clean_that_frees_nothing_backs_the_next_one_off(env):
-    env.state["freed"] = 1 * MB
+def test_a_clean_in_progress_is_never_overlapped(env):
     draw(env)
     env.click("auto-ram")
-    env.poll_with(95)
-    assert env.pump(lambda: len(env.state["cleans"]) == 1 and not env.panel._ram_busy)
-    assert env.panel._autoram._interval == 120
+    env.panel._ram_busy = True  # a clean is still running
+    env.poll_at(0)
+    env.poll_at(50)
+    env.pump(n=20)
+    assert env.state["cleans"] == []
 
 
-def test_a_manual_clean_also_restarts_the_automatic_interval(env):
-    draw(env)
+def test_a_manual_clean_restarts_the_interval(env):
+    env.state["t"] = 0.0
     env.panel._clean_ram()
-    assert env.pump(lambda: env.state["cleans"] and not env.panel._ram_busy)
+    env.settle()
+    assert len(env.state["cleans"]) == 1
     draw(env)
     env.click("auto-ram")
-    env.poll_with(95)
-    env.pump(n=30)
-    assert len(env.state["cleans"]) == 1  # the manual clean just now counts: no immediate second one
+    env.poll_at(3)
+    env.settle()
+    assert len(env.state["cleans"]) == 1  # 3 s after the manual clean: not yet
+    env.poll_at(10)
+    env.settle()
+    assert len(env.state["cleans"]) == 2
+
+
+def test_automatic_runs_stay_quiet_unless_they_actually_freed_something(env):
+    draw(env)
+    env.click("auto-ram")
+    env.panel._result, env.panel._result_ok = "senin son mesajın", False
+    env.state["freed"] = 2 * MB
+    env.poll_at(0)
+    env.settle()
+    assert env.panel._result == "senin son mesajın"  # a quiet no-op does not overwrite your message
+    env.state["freed"] = 400 * MB
+    env.poll_at(10)
+    env.settle()
+    assert "Otomatik RAM temizliği" in env.panel._result and env.panel._result_ok is True
 
 
 def test_preview_mode_ignores_the_toggle(env, monkeypatch):
@@ -178,6 +200,7 @@ def test_preview_mode_ignores_the_toggle(env, monkeypatch):
     assert env.panel._auto_ram is False and optsettings.load()["auto_ram"] is False
 
 
-def test_the_toggle_appears_on_the_ram_card_only(env):
+def test_the_controls_appear_on_the_ram_card_only(env):
     draw(env)
-    assert [k for k, _ in env.panel._regions].count("auto-ram") == 1
+    keys = [k for k, _ in env.panel._regions]
+    assert keys.count("auto-ram") == 1 and keys.count("auto-int") == 1

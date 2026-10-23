@@ -102,7 +102,7 @@ class OptimizerPanel(tk.Frame):
         self._is_admin = self._ramcleaner._ops.is_admin()
         saved = optsettings.load()
         self._auto_ram = saved["auto_ram"]
-        self._autoram = autoram.AutoRam(threshold=saved["auto_ram_threshold"])
+        self._autoram = autoram.AutoRam(interval=saved["auto_ram_interval"])
         self._last_auto_snap: Snapshot | None = None
         self._ram_busy = False
         self._ram_again = False
@@ -219,7 +219,7 @@ class OptimizerPanel(tk.Frame):
             on = self._auto_ram
             self._tiny("auto-ram", cx - 8, y0 + 326 * sc, ("● " if on else "○ ") + "Otomatik",
                        p.primary if on else theme.TEXT_MUTED, "e")
-            self._tiny("auto-thr", cx + 8, y0 + 326 * sc, f"≥ %{self._autoram.threshold}",
+            self._tiny("auto-int", cx + 8, y0 + 326 * sc, f"her {self._autoram.interval} sn",
                        p.secondary if on else theme.TEXT_FAINT, "w")
         self._draw_button(g.key, cx, y1 - 36 * sc, sc, active=g.key == "cpu" and self._auto_balance)
 
@@ -261,8 +261,8 @@ class OptimizerPanel(tk.Frame):
             self._clean(name)
         elif name == "auto-ram":
             self._toggle_auto_ram()
-        elif name == "auto-thr":
-            self._cycle_threshold()
+        elif name == "auto-int":
+            self._cycle_interval()
         elif name == "undo":
             self._restore()
         elif name == "admin":
@@ -293,9 +293,8 @@ class OptimizerPanel(tk.Frame):
                 self._last_tick_snap = snap
                 self._balance(snap)
             if self._auto_ram and snap is not self._last_auto_snap:
-                self._last_auto_snap = snap
-                used = summarize(snap)["ram"][0]
-                if not self._ram_busy and self._autoram.due(time.monotonic(), used):
+                self._last_auto_snap = snap  # only act on a live reading, never on a stale one
+                if not self._ram_busy and self._autoram.due(time.monotonic()):
                     self._clean_ram(auto=True)
         self.after(_INTERVAL_MS, self._poll)
 
@@ -394,31 +393,30 @@ class OptimizerPanel(tk.Frame):
 
     def _ram_done(self, parts: list[str], freed: int = 0, auto: bool = False):
         self._ram_busy = False
-        self._autoram.record(time.monotonic(), freed)  # manual cleans restart the automatic interval too
-        self._show(parts)
-        if auto and freed < 64 * 1024 * 1024:
-            self._result_ok = False  # a quiet "nothing to gain" is not worth a highlighted message
+        self._autoram.record(time.monotonic())  # manual cleans restart the automatic interval too
+        if not (auto and freed < 64 * 1024 * 1024):  # a quiet no-op must not overwrite the user's last message
+            self._show(parts)
         if self._ram_again:
             self._ram_again = False
             self._clean_ram()
 
     def _save_auto_ram(self) -> bool:
-        return optsettings.save({"auto_ram": self._auto_ram, "auto_ram_threshold": self._autoram.threshold})
+        return optsettings.save({"auto_ram": self._auto_ram, "auto_ram_interval": self._autoram.interval})
 
     def _toggle_auto_ram(self):
         self._auto_ram = not self._auto_ram
         ok = self._save_auto_ram()
         if self._auto_ram:
-            text = (f"Otomatik RAM temizliği açık: bellek %{self._autoram.threshold} ve üstüne çıkınca boştaki "
-                    "arka plan süreçlerinin belleği sıkıştırılır (en sık dakikada bir, hiçbir şey kapatılmaz).")
+            text = (f"Otomatik RAM temizliği açık: her {self._autoram.interval} saniyede bir boştaki arka plan "
+                    "süreçlerinin belleği sıkıştırılır (hiçbir şey kapatılmaz).")
         else:
             text = "Otomatik RAM temizliği kapatıldı."
         self._result, self._result_ok = text + ("" if ok else " (ayar kaydedilemedi)"), self._auto_ram
 
-    def _cycle_threshold(self):
-        self._autoram.threshold = optsettings.next_threshold(self._autoram.threshold)
+    def _cycle_interval(self):
+        self._autoram.interval = optsettings.next_interval(self._autoram.interval)
         ok = self._save_auto_ram()
-        self._result = (f"Otomatik temizleme eşiği: %{self._autoram.threshold}" +
+        self._result = (f"Otomatik temizleme aralığı: her {self._autoram.interval} saniye" +
                         ("" if ok else " (ayar kaydedilemedi)"))
         self._result_ok = False
 
