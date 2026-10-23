@@ -18,7 +18,7 @@ from tkinter import filedialog, messagebox, simpledialog
 
 from k_optimizer import icons, klauncher, theme, trimmer
 from k_optimizer.chrome import apply_window_theme, round_rect_points
-from k_series import __version__, products, settings, shortcuts, updater
+from k_series import __version__, i18n, products, settings, shortcuts, updater
 
 _W, _H = 1120, 720
 _SIDEBAR = 232
@@ -35,6 +35,15 @@ _MOTIONS = (("fast", "Hızlı"), ("normal", "Normal"), ("slow", "Yavaş"), ("off
 _PAGE_ALIASES = {"optimizer": "k-optimizer", "launcher": "k-launcher"}
 
 
+class _Canvas(tk.Canvas):
+    """A canvas whose text is shown in the interface language."""
+
+    def create_text(self, *args, **kw):
+        if isinstance(kw.get("text"), str):
+            kw["text"] = i18n.t(kw["text"])
+        return super().create_text(*args, **kw)
+
+
 class KSeriesApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -46,11 +55,14 @@ class KSeriesApp(tk.Tk):
         self._display_font = next((f for f in theme.DISPLAY_FONTS if f in families), "Segoe UI")
         self._preview = bool(os.environ.get("K_OPTIMIZER_PREVIEW"))
         theme.set_launcher_hint(settings.launcher_path())
+        saved_language = settings.load().get("language")
+        i18n.set_language(saved_language if saved_language in dict(i18n.LANGUAGES) else i18n.system_default())
+        self._lang_open = False
         self.pal = theme.load()
         self.motion = theme.motion_scale()
         icons.apply_window_icon(self, self.pal, "ks")  # the KS logo of the current theme
 
-        self.canvas = tk.Canvas(self, width=_W, height=_H, highlightthickness=0, bd=0)
+        self.canvas = _Canvas(self, width=_W, height=_H, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<Motion>", lambda e: self._set_hover(self._hit(e.x, e.y)))
@@ -177,7 +189,7 @@ class KSeriesApp(tk.Tk):
         ups = tuple(sorted((k, v.state, v.release.tag if v.release else "") for k, v in self._updates.items()))
         dots = (self._tick // 10) % 3 if self._scanning else -1  # the "aranıyor..." dots
         return (self._page, self._hover, self._message, self._scanning, dots, prods, ups, self._update_busy,
-                self.pal.id, self._rev)
+                self.pal.id, self._rev, i18n.current(), self._lang_open)
 
     def _maybe_trim(self, now: float):
         """Hand idle memory back to Windows now and then, the way K-Launcher keeps itself at a few MB."""
@@ -268,7 +280,7 @@ class KSeriesApp(tk.Tk):
             if running:
                 text += f"{name} şu an açık; güncelleme için nazikçe kapatılacak.\n\n"
             text += "İndirilsin ve yüklensin mi?" if fresh else "İndirilsin ve kurulsun mu?"
-            if not messagebox.askyesno("Güncelleme", text):
+            if not messagebox.askyesno(i18n.t("Güncelleme"), i18n.t(text)):
                 return
         self._update_busy = True
         threading.Thread(target=self._update_job, args=(upid, rel, name), daemon=True).start()
@@ -480,7 +492,7 @@ class KSeriesApp(tk.Tk):
             c.create_text(x0 + 28, ry, anchor="w", text=k, fill=theme.TEXT_MUTED, font=self._font(10))
             c.create_text(x0 + 150, ry, anchor="w", text=v, fill=theme.TEXT, font=self._font(10), width=x1 - x0 - 180)
         by, bx = y1 - 68, x0 + 28
-        self._button(("open", pid), bx, by, bx + 150, by + 40, f"{name}'ı aç" if prod.installed else "Bulunamadı",
+        self._button(("open", pid), bx, by, bx + 150, by + 40, (f"{name}'ı aç" if i18n.current() == "tr" else f"Open {name}") if prod.installed else "Bulunamadı",
                      enabled=prod.installed)
         bx += 162
         self._button(("folder", pid), bx, by, bx + 130, by + 40, "Klasörü aç", primary=False, enabled=prod.installed)
@@ -528,8 +540,10 @@ class KSeriesApp(tk.Tk):
                           font=self._font(11, True, True))
             self._region(("motion", word), (x0, my + 18, x0 + 116, my + 54))
         c.create_text(x, my + 76, anchor="w", width=_W - _SIDEBAR - 80, fill=theme.TEXT_FAINT, font=self._font(9),
-                      text=f"Seçim {theme.data_dirs()[0]} klasörüne yazılır. K-Launcher bir sonraki açılışında bu "
-                           "temayı kullanır; K-Series hemen değişir.")
+                      text=(f"Seçim {theme.data_dirs()[0]} klasörüne yazılır. K-Launcher açıkken bile temayı izler; "
+                            "K-Series hemen değişir.") if i18n.current() == "tr" else
+                           (f"The choice is written to {theme.data_dirs()[0]}. K-Launcher follows it while it runs; "
+                            "K-Series changes at once."))
         uy = my + 118
         c.create_text(x, uy, anchor="w", text="GÜNCELLEMELER (GITHUB)", fill=theme.TEXT_MUTED,
                       font=self._font(10, True, True))
@@ -551,6 +565,34 @@ class KSeriesApp(tk.Tk):
             c.create_text(x, ry, anchor="w", fill=theme.TEXT_MUTED, font=self._font(10), text=f"{_NAMES[upid]} deposu:")
             c.create_text(x + 200, ry, anchor="w", fill=theme.TEXT, font=self._font(10), text=settings.repo(upid))
             self._button(("repo", upid), x + 400, ry - 13, x + 400 + 100, ry + 13, "Değiştir", primary=False)
+        self._draw_language_select()
+
+    def _draw_language_select(self):
+        """A drop-down on the settings page: Türkçe / English (K-Launcher's first two languages)."""
+        c, p = self.canvas, self.pal
+        x1, y0 = _W - 40, 38
+        x0 = x1 - 170
+        c.create_text(x0 - 12, y0 + 18, anchor="e", text="DİL", fill=theme.TEXT_MUTED, font=self._font(10, True, True))
+        name = dict(i18n.LANGUAGES)[i18n.current()]
+        hover = self._hover == ("lang", "toggle")
+        c.create_polygon(round_rect_points(x0, y0, x1, y0 + 36, theme.RADIUS[1]), smooth=True,
+                         fill=p.control if hover else p.card, outline=p.primary if self._lang_open else p.outline,
+                         width=2 if self._lang_open else 1)
+        c.create_text(x0 + 16, y0 + 18, anchor="w", text=name, fill=theme.TEXT, font=self._font(11, True, True))
+        c.create_text(x1 - 16, y0 + 18, anchor="e", text="▴" if self._lang_open else "▾", fill=p.primary,
+                      font=self._font(11, True))
+        front = [(("lang", "toggle"), (x0, y0, x1, y0 + 36))]
+        if self._lang_open:
+            for i, (code, label) in enumerate(i18n.LANGUAGES):
+                iy = y0 + 40 + i * 36
+                sel, over = code == i18n.current(), self._hover == ("lang", code)
+                c.create_polygon(round_rect_points(x0, iy, x1, iy + 34, theme.RADIUS[1]), smooth=True,
+                                 fill=theme.accent_soft(p) if sel else (p.control if over else p.surface),
+                                 outline=p.primary if sel else p.outline)
+                c.create_text(x0 + 16, iy + 17, anchor="w", text=label, fill=p.primary if sel else theme.TEXT,
+                              font=self._font(11, True, True))
+                front.append((("lang", code), (x0, iy, x1, iy + 34)))
+        self._regions[:0] = front
 
     # --- interaction --------------------------------------------------------------
     def _hit(self, x, y):
@@ -565,10 +607,16 @@ class KSeriesApp(tk.Tk):
 
     def _on_click(self, e):
         key = self._hit(e.x, e.y)
+        if self._lang_open and (key is None or key[0] != "lang"):
+            self._lang_open = False
+            self._rev += 1
         if key is None:
             return
         kind, arg = key
         self._rev += 1
+        if kind == "lang" and arg == "toggle":
+            self._lang_open = not self._lang_open
+            return
         if kind in ("nav", "goto"):
             return self._goto(arg)
         if self._preview:
@@ -600,6 +648,11 @@ class KSeriesApp(tk.Tk):
             ok = theme.save_motion(arg)
             self.motion = theme.motion_scale()
             self._message = "" if ok else "Hareket ayarı yazılamadı."
+        elif kind == "lang":
+            self._lang_open = False
+            i18n.set_language(arg)
+            ok = settings.save({**settings.load(), "language": arg})
+            self._message = "" if ok else "Ayar kaydedilemedi."
         elif kind == "update":
             self._start_update(arg, ask=True)
         elif kind == "checknow":
@@ -612,9 +665,9 @@ class KSeriesApp(tk.Tk):
             self._change_repo(arg)
 
     def _change_repo(self, upid: str):
-        value = simpledialog.askstring("GitHub deposu", f"{_NAMES[upid]} güncellemeleri hangi depodan gelsin?\n"
-                                       "(sahip/depo biçiminde, ör. ikagzy/k-launcher)", initialvalue=settings.repo(upid),
-                                       parent=self)
+        value = simpledialog.askstring(i18n.t("GitHub deposu"), i18n.t(
+            f"{_NAMES[upid]} güncellemeleri hangi depodan gelsin?\n(sahip/depo biçiminde, ör. ikagzy/k-launcher)"),
+            initialvalue=settings.repo(upid), parent=self)
         if value is None:
             return
         value = value.strip()
@@ -629,7 +682,8 @@ class KSeriesApp(tk.Tk):
 
     def _pick_exe(self, pid: str):
         exe = _EXE[pid]
-        path = filedialog.askopenfilename(title=f"{exe} seç", filetypes=[(_NAMES[pid], exe), ("Uygulama", "*.exe")])
+        path = filedialog.askopenfilename(title=(f"{exe} seç" if i18n.current() == "tr" else f"Choose {exe}"),
+                                          filetypes=[(_NAMES[pid], exe), (i18n.t("Uygulama"), "*.exe")])
         if not path:
             return
         ok = settings.save({**settings.load(), _SAVED_KEY[pid]: path})

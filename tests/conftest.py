@@ -48,3 +48,14 @@ def hidden_windows(monkeypatch):
         self.withdraw()  # before the first update(), so it is never drawn
 
     monkeypatch.setattr(tkinter.Tk, "__init__", hidden_init)
+
+
+@pytest.fixture(autouse=True)
+def turkish_by_default(monkeypatch):
+    """K-Series picks its language from the settings, else the system; tests start in Turkish on every machine."""
+    from k_series import i18n
+
+    monkeypatch.setattr(i18n, "system_default", lambda: "tr")
+    i18n.set_language("tr")
+    yield
+    i18n.set_language("tr")
