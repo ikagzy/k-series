@@ -69,12 +69,14 @@ jobs:
             $hash = (Get-FileHash "dist/$exe.exe" -Algorithm SHA256).Hash.ToLower()
             "$hash  $exe.exe" | Set-Content "dist/$exe.exe.sha256" -Encoding ascii
           }
-          # one download for people who install by hand: both apps in a single zip
+          # one zip per app for people who install by hand (they are separate apps)
           $version = "${{ github.ref_name }}".TrimStart("v")
-          $zip = "dist/K-Series-$version.zip"
-          Compress-Archive -Path dist/K-Series.exe, dist/K-Optimizer.exe, LICENSE, README.md -DestinationPath $zip
-          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          "$zipHash  K-Series-$version.zip" | Set-Content "$zip.sha256" -Encoding ascii
+          foreach ($exe in "K-Series", "K-Optimizer") {
+            $zip = "dist/$exe-$version.zip"
+            Compress-Archive -Path "dist/$exe.exe", LICENSE, README.md -DestinationPath $zip
+            $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+            "$zipHash  $exe-$version.zip" | Set-Content "$zip.sha256" -Encoding ascii
+          }
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -87,3 +89,5 @@ jobs:
             dist/K-Optimizer.exe.sha256
             dist/K-Series-*.zip
             dist/K-Series-*.zip.sha256
+            dist/K-Optimizer-*.zip
+            dist/K-Optimizer-*.zip.sha256
