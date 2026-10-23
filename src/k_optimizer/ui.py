@@ -11,8 +11,8 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import (autoram, classifier, cli, icons, monitor, optsettings, probalance, ramclean, theme,
-                         throttle, trimmer, winutil)
+from k_optimizer import (autoram, classifier, cli, gpupref, icons, monitor, optsettings, probalance, ramclean,
+                         theme, throttle, trimmer, winutil)
 from k_optimizer.chrome import apply_window_theme, round_rect_points  # noqa: F401  (re-exported)
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
@@ -98,6 +98,7 @@ class OptimizerPanel(tk.Frame):
         self._last_fg: int | None = None
         self._ramcleaner = ramclean.RamCleaner()
         self._balancer = probalance.ProBalance(self._throttler, self._classify, self._own)
+        self._gpupref = gpupref.Store()
         self._auto_balance = False
         self._last_tick_snap: Snapshot | None = None
         self._is_admin = self._ramcleaner._ops.is_admin()
@@ -343,6 +344,8 @@ class OptimizerPanel(tk.Frame):
         return throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
 
     def _balance(self, snap: Snapshot):
+        if self._last_fg is None:
+            return  # same rule: never restrain anything until the foreground app is known
         report = self._balancer.tick(time.monotonic(), snap, self._foreground_group())
         if report.restrained:
             names = ", ".join(sorted({p.name for p in report.restrained}))
@@ -369,7 +372,10 @@ class OptimizerPanel(tk.Frame):
             snap = self._snap
         if snap is None:
             return
-        self._show(self._close_safe(snap, resource) + self._throttle(snap, resource))
+        parts = self._close_safe(snap, resource) + self._throttle(snap, resource)
+        if resource == "gpu":
+            parts += self._boost_foreground(snap)
+        self._show(parts)
 
     def _toggle_auto_balance(self):
         if self._auto_balance:
@@ -464,6 +470,8 @@ class OptimizerPanel(tk.Frame):
         self._result_ok = False
 
     def _throttle(self, snap: Snapshot, kind: str) -> list[str]:
+        if self._last_fg is None:
+            return []  # without knowing what the user is working in, a game could look like a background app
         exclude = throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
         picked = throttle.pick_background(snap.processes, self._classify, self._own, exclude, kind)
         if not picked:
@@ -475,15 +483,41 @@ class OptimizerPanel(tk.Frame):
         what = "CPU önceliği" if kind == "cpu" else "GPU önceliği"
         return [f"Arka plan {what} düşürüldü: {names}"]
 
+    def _boost_foreground(self, snap: Snapshot) -> list[str]:
+        """The other half of GPU relief: speed up the app the user is actually in. Its GPU scheduling class goes
+        to ABOVE_NORMAL now; with two or more GPUs its Windows graphics preference becomes "high performance"
+        (applied when the app is next started). Everything is recorded for Undo."""
+        if self._last_fg is None:
+            return ["Ön plan uygulaması henüz bilinmiyor: önce oyuna/uygulamana geç, sonra K-Optimizer'a dönüp "
+                    "tekrar bas (hiçbir sürece dokunulmadı)"]
+        group = self._foreground_group()
+        picked = throttle.pick_foreground_gpu(snap.processes, self._classify, self._own, group)
+        if not picked:
+            return ["Ön planda GPU kullanan bir uygulama bulunamadı (oyundayken değil, K-Optimizer'a geçince "
+                    "son baktığın uygulamaya bakılır)"]
+        parts = []
+        done = self._throttler.boost_gpu(picked).applied
+        if done:
+            parts.append("Ön plan GPU önceliği yükseltildi: " + ", ".join(sorted({p.name for p in done})))
+        if len(snap.adapters) >= 2:
+            exes = {p.exe: p.name for p in picked if p.exe}
+            boosted = [name for exe, name in exes.items() if self._gpupref.boost(exe)]
+            if boosted:
+                parts.append("bir sonraki açılışta yüksek performanslı GPU: " + ", ".join(sorted(set(boosted))))
+        return parts
+
     def _restore(self):
-        if not self._cleaner.pending() and not self._throttler.pending():
+        if not self._cleaner.pending() and not self._throttler.pending() and not self._gpupref.pending():
             return
         self._auto_balance = False
         r = self._cleaner.restore()
         n = self._throttler.restore()
+        prefs = self._gpupref.restore_all()
         text = f"Geri açıldı: {', '.join(r.started) or '-'}"
         if n:
             text += f" · {n} sürecin önceliği eski haline getirildi"
+        if prefs:
+            text += f" · {prefs} uygulamanın GPU tercihi eski haline getirildi"
         if r.failed:
             text += " · açılamadı: " + ", ".join(name for name, _ in r.failed)
         self._result, self._result_ok = text, False
@@ -498,7 +532,7 @@ class OptimizerPanel(tk.Frame):
             self.winfo_toplevel().event_generate("<<KSeriesQuit>>")  # the elevated copy takes over
 
     def _refresh_undo(self):
-        self._undo_ready = bool(self._cleaner.pending() or self._throttler.pending())
+        self._undo_ready = bool(self._cleaner.pending() or self._throttler.pending() or self._gpupref.pending())
 
     def shutdown(self):
         self._stop.set()

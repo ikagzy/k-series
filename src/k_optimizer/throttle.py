@@ -22,6 +22,8 @@ GPU_MIN_PERCENT = 1.0
 GAME_LIKE_GPU_PERCENT = 5.0  # a process this busy on the GPU is treated as a foreground workload
 
 _GPU_BELOW_NORMAL = 1
+GPU_BOOST_CLASS = 3  # ABOVE_NORMAL. HIGH/REALTIME are accepted too but could starve the desktop compositor
+FOREGROUND_GPU_MIN_VRAM = 100 * 1024 * 1024
 _QUERY, _SET_INFO, _LIMITED = 0x0400, 0x0200, 0x1000
 _POWER_THROTTLING = 4
 _THROTTLE_EXEC_SPEED = 0x1
@@ -156,6 +158,23 @@ def pick_background(
     return out
 
 
+def pick_foreground_gpu(
+    procs: Iterable[ProcInfo],
+    classify: Callable[[ProcInfo], Level],
+    own_pids: frozenset[int],
+    foreground_group: frozenset[int],
+) -> list[ProcInfo]:
+    """The processes of the app the user is working in that are actually using the GPU (a game and its GPU
+    helper processes). Never ours, never protected ones."""
+    out = []
+    for p in procs:
+        if p.pid not in foreground_group or p.pid in own_pids or classify(p) is Level.PROTECTED:
+            continue
+        if (p.gpu_percent or 0.0) >= GPU_MIN_PERCENT or (p.vram_bytes or 0) >= FOREGROUND_GPU_MIN_VRAM:
+            out.append(p)
+    return out
+
+
 @dataclass(frozen=True)
 class Record:
     pid: int
@@ -239,6 +258,36 @@ class Throttler:
 
     def pending_pids(self, kind: str | None = None) -> set[int]:
         return {r.pid for r in self._load() if kind is None or r.kind == kind}
+
+    def boost_gpu(self, procs: Sequence[ProcInfo]) -> ThrottleReport:
+        """Raise the GPU scheduling class of these processes to ABOVE_NORMAL (recorded as kind 'gpu-boost')."""
+        ops = self._ops
+        applied: list[ProcInfo] = []
+        skipped: list[tuple[ProcInfo, str]] = []
+        new: list[Record] = []
+        for p in procs:
+            ct = ops.create_time(p.pid)
+            if ct is None:
+                skipped.append((p, "süreç yok"))
+                continue
+            if abs(ct - p.create_time) > 0.01:
+                skipped.append((p, "süreç değişmiş"))
+                continue
+            prev = ops.get_gpu(p.pid)
+            if prev is None:
+                skipped.append((p, "GPU önceliği okunamadı"))
+                continue
+            if prev >= GPU_BOOST_CLASS:
+                skipped.append((p, "zaten yüksek"))
+                continue
+            if not ops.set_gpu(p.pid, GPU_BOOST_CLASS):
+                skipped.append((p, "yetki gerekir"))
+                continue
+            new.append(Record(p.pid, ct, p.name, "gpu-boost", prev))
+            applied.append(p)
+        if new:
+            self._save(self._load() + new)
+        return ThrottleReport(tuple(applied), tuple(skipped))
 
     def restore(self, kind: str | None = None, pids: set[int] | None = None) -> int:
         """Put back recorded values; limit to one kind and/or some pids, the rest stay recorded."""

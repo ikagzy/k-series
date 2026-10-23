@@ -174,3 +174,62 @@ def test_restore_can_be_limited_to_given_pids(tmp_path):
     assert t.restore(kind="cpu", pids={1}) == 1
     assert ops.cpu[1] == NORMAL and ops.cpu[2] == BELOW
     assert t.pending_pids("cpu") == {2}
+
+
+# --- boosting the foreground app's GPU priority ---------------------------------------------------------------
+MB = 1024 * 1024
+
+
+def gp(pid, gpu=None, vram=None, name="game.exe"):
+    return ProcInfo(pid, name, "C:\Games\\" + name, (), 1.0, 0.0, 1, gpu, vram)
+
+
+def test_pick_foreground_gpu_takes_only_gpu_users_inside_the_foreground_group():
+    procs = [
+        gp(1, gpu=40.0),                       # the game itself
+        gp(2, gpu=2.0, name="game-gpu.exe"),   # its GPU helper process
+        gp(3, gpu=0.0, vram=500 * MB),         # holds lots of VRAM: counts
+        gp(4, gpu=0.0, vram=10 * MB),          # idle
+        gp(5, gpu=60.0),                       # busy but NOT in the foreground group
+        gp(6, gpu=30.0),                       # ours
+        gp(99, gpu=30.0),                      # protected
+        gp(7, gpu=None, vram=None),            # no GPU data at all
+    ]
+    got = throttle.pick_foreground_gpu(procs, level, frozenset({6}), frozenset({1, 2, 3, 4, 6, 99, 7}))
+    assert [p.pid for p in got] == [1, 2, 3]
+
+
+def test_pick_foreground_gpu_with_no_foreground_group_picks_nothing():
+    assert throttle.pick_foreground_gpu([gp(1, gpu=90.0)], level, frozenset(), frozenset()) == []
+
+
+def test_boost_raises_the_gpu_class_to_above_normal_never_higher_and_records_the_old_value(tmp_path):
+    ops = FakeOps(cts={1: 1.0}, gpu={1: 2})
+    t = throttle.Throttler(tmp_path / "t.json", ops)
+    r = t.boost_gpu([mk(1)])
+    assert [p.pid for p in r.applied] == [1]
+    assert ops.gpu[1] == 3 and throttle.GPU_BOOST_CLASS == 3  # ABOVE_NORMAL: HIGH/REALTIME could starve the desktop
+    assert t.pending_pids("gpu-boost") == {1}
+    assert t.restore() == 1 and ops.gpu[1] == 2 and t.pending() == 0
+
+
+def test_boost_skips_vanished_reused_unreadable_denied_and_already_high_processes(tmp_path):
+    ops = FakeOps(cts={2: 9.0, 3: 1.0, 4: 1.0, 5: 1.0}, gpu={2: 2, 3: None, 4: 4, 5: 2}, fail_set={5})
+    t = throttle.Throttler(tmp_path / "t.json", ops)
+    r = t.boost_gpu([mk(1), mk(2), mk(3), mk(4), mk(5)])
+    reasons = {p.pid: why for p, why in r.skipped}
+    assert reasons == {1: "süreç yok", 2: "süreç değişmiş", 3: "GPU önceliği okunamadı", 4: "zaten yüksek",
+                       5: "yetki gerekir"}
+    assert r.applied == () and t.pending() == 0
+
+
+def test_boost_and_lowering_are_kept_apart_so_each_can_be_undone_on_its_own(tmp_path):
+    ops = FakeOps(cts={1: 1.0, 2: 1.0}, gpu={1: 2, 2: 2})
+    t = throttle.Throttler(tmp_path / "t.json", ops)
+    t.apply([mk(1)], "gpu")       # background app slowed down
+    t.boost_gpu([mk(2)])          # foreground app raised
+    assert ops.gpu == {1: 1, 2: 3}
+    assert t.pending_pids("gpu") == {1} and t.pending_pids("gpu-boost") == {2}
+    assert t.restore(kind="gpu-boost") == 1
+    assert ops.gpu == {1: 1, 2: 2}
+    assert t.restore() == 1 and ops.gpu == {1: 2, 2: 2}
