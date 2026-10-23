@@ -168,3 +168,65 @@ def test_scan_prefers_the_shallower_copy_over_a_newer_one_buried_in_a_build_fold
     os.utime(shallow, (1, 1))  # much older, still wins
     assert klauncher.find_optimizer(running=lambda: [], scan_roots=[tmp_path / "desk"]) == shallow
     assert klauncher.scan_for_exe([tmp_path / "desk"], name="K-Optimizer.exe") == [shallow, deep]
+
+
+# --- finding running apps without asking the OS about every process -----------------------------------------
+import os as _os  # noqa: E402
+import time as _time  # noqa: E402
+
+import psutil as _psutil  # noqa: E402
+
+from k_optimizer import procscan  # noqa: E402
+
+
+def _raw(pid, name):
+    return procscan.RawProc(pid, 4, name, 1000.0, 0, 1)
+
+
+def test_running_lookup_uses_the_single_call_process_table_and_asks_for_the_path_only_of_matches():
+    asked = []
+    scan = lambda: [_raw(10, "svchost.exe"), _raw(11, "KLauncher.exe"), _raw(12, "klauncher.exe"), _raw(13, "x.exe")]
+
+    def exe_of(pid):
+        asked.append(pid)
+        return f"C:/apps/{pid}/KLauncher.exe"
+
+    got = klauncher._running_named("KLauncher.exe", scan=scan, exe_of=exe_of)
+    assert got == [Path("C:/apps/11/KLauncher.exe"), Path("C:/apps/12/KLauncher.exe")]
+    assert asked == [11, 12]  # nothing was asked about the other processes
+
+
+def test_running_lookup_tolerates_processes_that_vanish_or_deny_the_path_query():
+    scan = lambda: [_raw(1, "KLauncher.exe"), _raw(2, "KLauncher.exe")]
+    answers = {1: None, 2: "C:/a/KLauncher.exe"}
+    got = klauncher._running_named("KLauncher.exe", scan=scan, exe_of=lambda pid: answers[pid])
+    assert got == [Path("C:/a/KLauncher.exe")]
+
+
+def test_pids_lookup_needs_no_path_queries_at_all():
+    scan = lambda: [_raw(5, "K-Optimizer.exe"), _raw(6, "other.exe")]
+    assert klauncher._pids_named("K-Optimizer.exe", scan=scan) == [5]
+
+
+def test_if_the_native_scan_fails_the_lookups_fall_back_to_psutil():
+    def broken():
+        raise OSError("no ntdll")
+
+    me = _psutil.Process(_os.getpid())
+    got = klauncher._running_named(me.name(), scan=broken)
+    assert Path(me.exe()) in got
+    assert _os.getpid() in klauncher._pids_named(me.name(), scan=broken)
+
+
+def test_the_live_lookup_finds_this_process_and_is_cheap():
+    me = _psutil.Process(_os.getpid())
+    _time.sleep(0)
+    start = _psutil.Process().cpu_times()
+    t = _time.perf_counter()
+    for _ in range(5):
+        found = klauncher._running_named(me.name())
+    wall = (_time.perf_counter() - t) / 5
+    used = _psutil.Process().cpu_times()
+    cpu = ((used.user + used.system) - (start.user + start.system)) / 5
+    assert Path(me.exe()) in found
+    assert cpu < 0.15 and wall < 0.5, f"{cpu * 1000:.0f} ms CPU per lookup (the psutil walk cost about 1000 ms)"

@@ -49,7 +49,7 @@ def env(monkeypatch):
     monkeypatch.delenv("K_OPTIMIZER_PREVIEW", raising=False)
     state = {"cleans": [], "freed": 300 * MB, "t": 0.0}
     steady = Snapshot(5.0, 8 * GB, 32 * GB, (), ())
-    monkeypatch.setattr(ui.monitor, "snapshot_after", lambda interval=0.5: dataclasses.replace(steady))
+    monkeypatch.setattr(ui.monitor, "sample", lambda interval=0.5: dataclasses.replace(steady))
     monkeypatch.setattr(ui, "time", types.SimpleNamespace(monotonic=lambda: state["t"]))
 
     def fake_clean(self, pids):
@@ -102,7 +102,7 @@ def test_the_interval_cycles_and_is_remembered(env):
 
 def test_a_saved_choice_is_restored_on_the_next_launch(monkeypatch):
     optsettings.save({"auto_ram": True, "auto_ram_interval": 30})
-    monkeypatch.setattr(ui.monitor, "snapshot_after", lambda interval=0.5: Snapshot(5.0, 1, 2, (), ()))
+    monkeypatch.setattr(ui.monitor, "sample", lambda interval=0.5: Snapshot(5.0, 1, 2, (), ()))
     try:
         root = tk.Tk()
     except tk.TclError as e:

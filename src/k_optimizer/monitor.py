@@ -43,6 +43,11 @@ class ProcessTable:
         self._prev: dict[int, tuple[float, int]] = {}
         self._prev_t: float | None = None
 
+    @property
+    def primed(self) -> bool:
+        """True once a reading exists to measure CPU change against."""
+        return self._prev_t is not None
+
     def read(self) -> list[ProcInfo]:
         try:
             raws = self._scan()
@@ -120,4 +125,13 @@ def snapshot_after(interval: float = 0.5, read_gpu_fn: Callable[[], gpu.GpuReadi
     psutil.cpu_percent(None)
     _default_table.read()
     time.sleep(interval)
+    return snapshot(read_gpu_fn)
+
+
+def sample(interval: float = 0.5, read_gpu_fn: Callable[[], gpu.GpuReading | None] | None = None) -> Snapshot:
+    """For polling in a loop: the previous reading is the baseline, so only the very first call has to wait."""
+    if not _default_table.primed:
+        psutil.cpu_percent(None)
+        _default_table.read()
+        time.sleep(interval)
     return snapshot(read_gpu_fn)

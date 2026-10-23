@@ -75,7 +75,7 @@ def snapshot(adapters=2):
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     monkeypatch.delenv("K_OPTIMIZER_PREVIEW", raising=False)
-    monkeypatch.setattr(ui.monitor, "snapshot_after", lambda interval=0.5: snapshot())
+    monkeypatch.setattr(ui.monitor, "sample", lambda interval=0.5: snapshot())
     monkeypatch.setattr(throttle, "related_pids", lambda pid: frozenset({100, 101}))
     try:
         root = tk.Tk()

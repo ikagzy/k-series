@@ -17,7 +17,8 @@ from k_optimizer.chrome import apply_window_theme, round_rect_points  # noqa: F4
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
 
-_INTERVAL_MS = 1500
+_INTERVAL_MS = 2000
+_IDLE_FRAME_MS = 150  # wake-up rate while nothing moves
 _FRAME_MS = 40
 _THEME_POLL_MS = 2000
 
@@ -110,6 +111,9 @@ class OptimizerPanel(tk.Frame):
         self._visible = True  # False while minimised: nothing to show, so nothing to measure
         self._tick = 0
         self._last_sig = None
+        self._last_dyn = None
+        self._fast = 8  # frames left at the quick rate
+        self._frame_job = None
         self._last_trim = time.monotonic() - 18  # first trim about 2 s after start, then every 20 s
         self._ram_again = False
         self._done: queue.SimpleQueue = queue.SimpleQueue()
@@ -125,7 +129,7 @@ class OptimizerPanel(tk.Frame):
         threading.Thread(target=self._worker, daemon=True).start()
         self.after(300, self._poll)
         self.after(200, self._track_foreground)
-        self.after(_FRAME_MS, self._frame)
+        self._frame_job = self.after(_FRAME_MS, self._frame)
 
     @property
     def pal(self) -> theme.Palette:
@@ -145,10 +149,13 @@ class OptimizerPanel(tk.Frame):
         except Exception:
             return True
 
-    def _signature(self):
-        """Everything that changes what the panel shows. Equal signature, equal picture."""
-        gauges = tuple((round(g.shown), g.available, g.sub) for g in self._gauges.values())  # whole points: finer is invisible
-        return (gauges, self._result, self._result_ok, self._undo_ready, self._hover, self._auto_balance,
+    def _dynamic_signature(self):
+        """The readings: what the dials and numbers show (whole points: finer is invisible)."""
+        return tuple((round(g.shown), g.available, g.sub) for g in self._gauges.values())
+
+    def _static_signature(self):
+        """Everything else on screen; when this changes the whole window is rebuilt."""
+        return (self._result, self._result_ok, self._undo_ready, self._hover, self._auto_balance,
                 self._auto_ram, self._autoram.interval, self._ram_busy, self.pal.id,
                 self.canvas.winfo_width(), self.canvas.winfo_height())
 
@@ -172,15 +179,30 @@ class OptimizerPanel(tk.Frame):
             if self._tick % 10 == 0:
                 self._visible = self._check_visible()
             if self._is_shown():
-                sig = self._signature()
-                if sig != self._last_sig:  # repainting an unchanged window is pure waste
-                    self._last_sig = sig
+                static, dynamic = self._static_signature(), self._dynamic_signature()
+                if static != self._last_sig:  # something structural changed: rebuild the whole window
+                    self._last_sig, self._last_dyn = static, dynamic
                     self._draw()
+                elif dynamic != self._last_dyn:  # only readings changed: replace just the values
+                    self._last_dyn = dynamic
+                    self._draw_dynamic()
             self._maybe_trim(time.monotonic())
+            moving = any(abs(g.target - g.shown) >= 0.5 for g in self._gauges.values())
+            self._fast = 8 if moving else max(0, self._fast - 1)
         except Exception:  # one bad frame must never freeze the window for good
             traceback.print_exc()
         finally:
-            self.after(_FRAME_MS, self._frame)
+            # smooth while something moves (or just did), a slow heartbeat while nothing does
+            self._frame_job = self.after(_FRAME_MS if self._fast else _IDLE_FRAME_MS, self._frame)
+
+    def _kick(self):
+        """Something happened (mouse, click): run the next frame right away and stay quick for a moment."""
+        self._fast = 8
+        try:
+            self.after_cancel(self._frame_job)
+        except (AttributeError, ValueError, tk.TclError):
+            pass
+        self._frame_job = self.after(1, self._frame)
 
     def _layout(self) -> dict:
         w = max(self.canvas.winfo_width(), 420)
@@ -204,7 +226,9 @@ class OptimizerPanel(tk.Frame):
             c.create_text(32, 76, anchor="w", text="Windows'un gereksiz yükünü temizle", fill=theme.TEXT_MUTED,
                           font=self._font(10))
         for i, key in enumerate(("ram", "gpu", "cpu")):
-            self._draw_card(self._gauges[key], lay["left"] + i * (lay["card_w"] + lay["gap"]), lay)
+            x0 = lay["left"] + i * (lay["card_w"] + lay["gap"])
+            self._draw_card(self._gauges[key], x0, lay)
+            self._draw_card_dynamic(self._gauges[key], x0, lay)
         y = lay["top"] + lay["card_h"] + 20
         color = p.primary if self._result_ok else theme.TEXT_MUTED
         c.create_text(lay["left"], y, anchor="nw", text=self._result, fill=color, width=lay["total"],
@@ -230,31 +254,21 @@ class OptimizerPanel(tk.Frame):
         x0, y0, x1, y1 = self.canvas.bbox(item)
         self._regions.append((name, (x0 - 6, y0 - 6, x1 + 6, y1 + 6)))
 
-    def _draw_card(self, g: Gauge, x0: float, lay: dict):
-        c, p, sc = self.canvas, self.pal, lay["s"]
+    def _card_geometry(self, x0: float, lay: dict):
+        sc = lay["s"]
         y0, x1, y1 = lay["top"], x0 + lay["card_w"], lay["top"] + lay["card_h"]
+        r = _DIAL_R * sc
+        cx, cy = (x0 + x1) / 2, y0 + 150 * sc
+        return sc, y0, x1, y1, cx, cy, (cx - r, cy - r, cx + r, cy + r), max(8, round(_DIAL_W * sc))
+
+    def _draw_card(self, g: Gauge, x0: float, lay: dict):
+        """The parts of a card that only change with the window, the theme, hover or a message."""
+        c, p = self.canvas, self.pal
+        sc, y0, x1, y1, cx, cy, box, dial_w = self._card_geometry(x0, lay)
         c.create_polygon(round_rect_points(x0, y0, x1, y1, theme.RADIUS[3]), smooth=True,
                          fill=p.card, outline=p.outline, width=1)
-        r, dial_w = _DIAL_R * sc, max(8, round(_DIAL_W * sc))
-        cx, cy = (x0 + x1) / 2, y0 + 150 * sc
-        box = (cx - r, cy - r, cx + r, cy + r)
         c.create_arc(*box, start=_START, extent=-_SWEEP, style="arc", outline=p.control, width=dial_w)
-        frac = g.shown / 100 if g.available else 0.0
-        step = _SWEEP / _SEGMENTS
-        colors = theme.arc_colors(frac, p, _SEGMENTS)
-        if frac > 0 and colors:
-            c.create_arc(*box, start=_START, extent=-step * len(colors), style="arc",
-                         outline=theme.accent_soft(p), width=dial_w + 10)
-            for i, col in enumerate(colors):
-                c.create_arc(*box, start=_START - i * step, extent=-(step + 0.6), style="arc",
-                             outline=col, width=dial_w)
-        c.create_text(cx, cy - 8 * sc, text=f"{g.shown:.0f}" if g.available else "—",
-                      fill=theme.TEXT if g.available else theme.TEXT_FAINT,
-                      font=self._font(round(46 * sc), True, True))
-        if g.available:
-            c.create_text(cx, cy + 40 * sc, text="%", fill=p.secondary, font=self._font(13, True, True))
         c.create_text(cx, y0 + 282 * sc, text=g.label, fill=theme.TEXT, font=self._font(15, True, True))
-        c.create_text(cx, y0 + 304 * sc, text=g.sub, fill=theme.TEXT_MUTED, font=self._font(10))
         if g.key == "ram":
             on = self._auto_ram
             self._tiny("auto-ram", cx - 8, y0 + 326 * sc, ("● " if on else "○ ") + "Otomatik",
@@ -262,6 +276,32 @@ class OptimizerPanel(tk.Frame):
             self._tiny("auto-int", cx + 8, y0 + 326 * sc, f"her {self._autoram.interval} sn",
                        p.secondary if on else theme.TEXT_FAINT, "w")
         self._draw_button(g.key, cx, y1 - 36 * sc, sc, active=g.key == "cpu" and self._auto_balance)
+
+    def _draw_card_dynamic(self, g: Gauge, x0: float, lay: dict):
+        """What changes with every reading: the value arc, the number and the sub-label (tagged "dyn")."""
+        c, p = self.canvas, self.pal
+        sc, y0, x1, y1, cx, cy, box, dial_w = self._card_geometry(x0, lay)
+        frac = g.shown / 100 if g.available else 0.0
+        step = _SWEEP / _SEGMENTS
+        colors = theme.arc_colors(frac, p, _SEGMENTS)
+        if frac > 0 and colors:
+            c.create_arc(*box, start=_START, extent=-step * len(colors), style="arc",
+                         outline=theme.accent_soft(p), width=dial_w + 10, tags="dyn")
+            for i, col in enumerate(colors):
+                c.create_arc(*box, start=_START - i * step, extent=-(step + 0.6), style="arc",
+                             outline=col, width=dial_w, tags="dyn")
+        c.create_text(cx, cy - 8 * sc, text=f"{g.shown:.0f}" if g.available else "—",
+                      fill=theme.TEXT if g.available else theme.TEXT_FAINT,
+                      font=self._font(round(46 * sc), True, True), tags="dyn")
+        if g.available:
+            c.create_text(cx, cy + 40 * sc, text="%", fill=p.secondary, font=self._font(13, True, True), tags="dyn")
+        c.create_text(cx, y0 + 304 * sc, text=g.sub, fill=theme.TEXT_MUTED, font=self._font(10), tags="dyn")
+
+    def _draw_dynamic(self):
+        self.canvas.delete("dyn")
+        lay = self._layout()
+        for i, key in enumerate(("ram", "gpu", "cpu")):
+            self._draw_card_dynamic(self._gauges[key], lay["left"] + i * (lay["card_w"] + lay["gap"]), lay)
 
     def _draw_button(self, key: str, cx: float, cy: float, sc: float = 1.0, active: bool = False):
         c, p = self.canvas, self.pal
@@ -287,13 +327,17 @@ class OptimizerPanel(tk.Frame):
         return None
 
     def _set_hover(self, name):
+        changed = name != self._hover
         self._hover = name
         self.canvas.configure(cursor="hand2" if name else "")
+        if changed:
+            self._kick()
 
     def _on_motion(self, e):
         self._set_hover(self._hit(e.x, e.y))
 
     def _on_click(self, e):
+        self._kick()
         if os.environ.get("K_OPTIMIZER_PREVIEW"):
             return  # preview mode (screenshots/demos): look but never act on the user's system
         name = self._hit(e.x, e.y)
@@ -314,7 +358,7 @@ class OptimizerPanel(tk.Frame):
             snap = None
             if self._visible or self._auto_ram or self._auto_balance:
                 try:
-                    snap = monitor.snapshot_after(0.5)
+                    snap = monitor.sample(0.5)
                 except Exception:  # keep the dials alive if one sample fails
                     snap = None
             if snap is not None:

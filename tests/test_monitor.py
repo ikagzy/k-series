@@ -168,3 +168,25 @@ def test_if_the_native_scan_fails_the_snapshot_falls_back_to_psutil(monkeypatch)
     t = monitor.ProcessTable(scan=broken)
     got = t.read()
     assert os.getpid() in {p.pid for p in got}
+
+
+# --- sampling in a loop: the previous reading is the baseline ----------------------------------------------
+def test_sample_primes_only_the_first_time_and_then_reuses_the_previous_reading(monkeypatch):
+    slept = []
+    monkeypatch.setattr(monitor.time, "sleep", slept.append)
+    fresh = monitor.ProcessTable()
+    monkeypatch.setattr(monitor, "_default_table", fresh)
+    assert fresh.primed is False
+    monitor.sample(0.5, read_gpu_fn=lambda: None)
+    assert slept == [0.5] and fresh.primed is True      # the first call waits to build a baseline
+    monitor.sample(0.5, read_gpu_fn=lambda: None)
+    monitor.sample(0.5, read_gpu_fn=lambda: None)
+    assert slept == [0.5]                               # later calls do not wait at all
+
+
+def test_a_sample_after_a_gap_reports_cpu_over_the_whole_gap():
+    clock = Clock()
+    t = table([[raw(1, cpu=0)], [raw(1, cpu=int(1e7 * 8))]], clock=clock, cores=4)
+    t.read()
+    clock.t += 4.0                                       # 4 s later it has used 8 s of CPU on 4 cores
+    assert t.read()[0].cpu_percent == 50.0

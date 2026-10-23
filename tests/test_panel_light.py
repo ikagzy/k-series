@@ -21,7 +21,7 @@ def panel(monkeypatch):
         calls["n"] += 1
         return Snapshot(5.0, calls["used"], 32 * GB, (), ())
 
-    monkeypatch.setattr(ui.monitor, "snapshot_after", snap)
+    monkeypatch.setattr(ui.monitor, "sample", snap)
     monkeypatch.setattr(ui, "_INTERVAL_MS", 40)
     try:
         root = tk.Tk()
@@ -49,8 +49,9 @@ def pump(p, n=100, until=lambda: False):
 
 def draws(p, monkeypatch, frames=60):
     count = []
-    original = p._draw
+    original, original_dyn = p._draw, p._draw_dynamic
     monkeypatch.setattr(p, "_draw", lambda: (count.append(1), original())[1])
+    monkeypatch.setattr(p, "_draw_dynamic", lambda: (count.append(1), original_dyn())[1])
     pump(p, frames)
     return len(count)
 
@@ -71,8 +72,9 @@ def test_a_gauge_animating_to_a_new_value_repaints_until_it_arrives_and_then_sto
     settled(panel)
     panel._calls["used"] = 28 * GB  # the machine's RAM use jumps from 25% to 88%
     count = []
-    original = panel._draw
+    original, original_dyn = panel._draw, panel._draw_dynamic
     monkeypatch.setattr(panel, "_draw", lambda: (count.append(1), original())[1])
+    monkeypatch.setattr(panel, "_draw_dynamic", lambda: (count.append(1), original_dyn())[1])
     assert pump(panel, 800, until=lambda: panel._gauges["ram"].shown > 85)  # the dial sweeps there...
     assert len(count) >= 3  # ...over several repainted frames
     settled(panel)
@@ -85,13 +87,13 @@ def test_hover_messages_and_toggles_repaint(panel, monkeypatch):
     pump(panel, 80)
     panel._draw()  # regions exist
     panel._set_hover("ram")
-    assert draws(panel, monkeypatch, 10) >= 1
+    assert draws(panel, monkeypatch, 40) >= 1
     panel._result = "merhaba"
-    assert draws(panel, monkeypatch, 10) >= 1
+    assert draws(panel, monkeypatch, 40) >= 1
     panel._auto_ram = True
-    assert draws(panel, monkeypatch, 10) >= 1
+    assert draws(panel, monkeypatch, 40) >= 1
     panel._autoram.interval = 30
-    assert draws(panel, monkeypatch, 10) >= 1
+    assert draws(panel, monkeypatch, 40) >= 1
 
 
 def test_it_trims_its_own_working_set_now_and_then(panel, monkeypatch):
@@ -176,8 +178,9 @@ def test_minimising_is_noticed_through_the_shown_state_not_a_fragile_toplevel_lo
 def test_a_sub_percent_wobble_in_a_reading_does_not_repaint_but_a_whole_point_does(panel, monkeypatch):
     settled(panel)
     count = []
-    original = panel._draw
+    original, original_dyn = panel._draw, panel._draw_dynamic
     monkeypatch.setattr(panel, "_draw", lambda: (count.append(1), original())[1])
+    monkeypatch.setattr(panel, "_draw_dynamic", lambda: (count.append(1), original_dyn())[1])
     panel._calls["used"] += int(0.03 * GB)  # +0.1 percentage point: same number, same text, same arc to the eye
     pump(panel, 60)
     assert count == []
@@ -187,3 +190,66 @@ def test_a_sub_percent_wobble_in_a_reading_does_not_repaint_but_a_whole_point_do
 
 def test_the_dial_is_built_from_a_modest_number_of_canvas_items():
     assert ui._SEGMENTS <= 40  # each repaint creates this many arcs per active gauge
+
+
+def layered(p, monkeypatch):
+    full, dyn = [], []
+    original, original_dyn = p._draw, p._draw_dynamic
+    monkeypatch.setattr(p, "_draw", lambda: (full.append(1), original())[1])
+    monkeypatch.setattr(p, "_draw_dynamic", lambda: (dyn.append(1), original_dyn())[1])
+    return full, dyn
+
+
+def test_a_changing_reading_repaints_only_the_dynamic_layer_not_the_whole_window(panel, monkeypatch):
+    settled(panel)
+    full, dyn = layered(panel, monkeypatch)
+    panel._calls["used"] += 2 * GB
+    assert pump(panel, 300, until=lambda: len(dyn) >= 2)
+    assert full == []  # cards, labels, buttons and links were not rebuilt
+
+
+def test_hover_messages_and_toggles_still_rebuild_the_whole_window(panel, monkeypatch):
+    settled(panel)
+    full, dyn = layered(panel, monkeypatch)
+    panel._result = "yeni mesaj"
+    pump(panel, 15)
+    assert len(full) >= 1
+
+
+def test_the_dynamic_repaint_replaces_the_values_instead_of_piling_items_up(panel):
+    settled(panel)
+    panel._draw()
+    before = len(panel.canvas.find_all())
+    for _ in range(30):
+        panel._draw_dynamic()
+    assert len(panel.canvas.find_all()) == before  # no leak of canvas items across repaints
+
+
+def test_the_dynamic_items_are_a_small_share_of_the_picture(panel):
+    settled(panel)
+    panel._draw()
+    total, dyn = len(panel.canvas.find_all()), len(panel.canvas.find_withtag("dyn"))
+    assert 0 < dyn < total * 0.7  # so repainting them is clearly cheaper than a full repaint
+
+
+def test_an_idle_panel_wakes_up_far_less_often_than_an_animating_one(panel, monkeypatch):
+    settled(panel)
+    pump(panel, 30)
+    frames = []
+    original = panel._frame
+    monkeypatch.setattr(panel, "_frame", lambda: (frames.append(1), original())[1])
+    pump(panel, 100)  # ~1 s idle
+    idle = len(frames)
+    assert idle <= 10, f"{idle} wake-ups in a second while nothing changes"
+    frames.clear()
+    panel._calls["used"] += 10 * GB  # now the dial sweeps
+    pump(panel, 100)
+    assert len(frames) > idle + 5
+
+
+def test_the_mouse_gets_an_immediate_response_even_when_the_panel_is_idling(panel, monkeypatch):
+    settled(panel)
+    pump(panel, 40)  # deep idle
+    full, dyn = layered(panel, monkeypatch)
+    panel._set_hover("ram")
+    assert pump(panel, 30, until=lambda: len(full) >= 1)  # repainted within ~300 ms, not at the idle rate

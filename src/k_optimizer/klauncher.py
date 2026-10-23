@@ -11,6 +11,8 @@ from pathlib import Path
 
 import psutil
 
+from k_optimizer import procscan
+
 EXE_NAME = "KLauncher.exe"
 OPTIMIZER_EXE = "K-Optimizer.exe"
 _SKIP_DIRS = {"obj", "bin", ".git", "node_modules", "__pycache__", "assets", "data"}
@@ -20,17 +22,37 @@ def _env(name: str, default: str) -> Path:
     return Path(os.environ.get(name) or default)
 
 
-def _running_named(name: str) -> list[Path]:
+def _exe_of(pid: int) -> str | None:
+    try:
+        return psutil.Process(pid).exe() or None
+    except (psutil.Error, OSError):
+        return None
+
+
+def _running_named(name: str, scan=None, exe_of=_exe_of) -> list[Path]:
+    """Paths of the running processes with this image name. The process table comes from one system call; only
+    the (few) matches are asked for their path. (psutil.process_iter(["exe"]) queried every process separately:
+    about a second of CPU, and the theme poller did it every 20 seconds.)"""
+    scan = scan or procscan.scan
     out: list[Path] = []
-    for p in psutil.process_iter(["name", "exe"]):
+    try:
+        matches = [r.pid for r in scan() if r.name.lower() == name.lower()]
+    except (OSError, AttributeError):
+        matches = [p.pid for p in _iter_psutil(name)]
+    for pid in matches:
+        exe = exe_of(pid)
+        if exe and Path(exe) not in out:
+            out.append(Path(exe))
+    return out
+
+
+def _iter_psutil(name: str):
+    for p in psutil.process_iter(["name", "pid"]):
         try:
-            if (p.info["name"] or "").lower() == name.lower() and p.info["exe"]:
-                exe = Path(p.info["exe"])
-                if exe not in out:
-                    out.append(exe)
+            if (p.info["name"] or "").lower() == name.lower():
+                yield p
         except psutil.Error:
             continue
-    return out
 
 
 def running_exes() -> list[Path]:
@@ -139,15 +161,12 @@ def file_version(exe: Path) -> str | None:
         return None
 
 
-def _pids_named(name: str) -> list[int]:
-    out: list[int] = []
-    for p in psutil.process_iter(["name", "pid"]):
-        try:
-            if (p.info["name"] or "").lower() == name.lower():
-                out.append(p.info["pid"])
-        except psutil.Error:
-            continue
-    return out
+def _pids_named(name: str, scan=None) -> list[int]:
+    scan = scan or procscan.scan
+    try:
+        return [r.pid for r in scan() if r.name.lower() == name.lower()]
+    except (OSError, AttributeError):
+        return [p.pid for p in _iter_psutil(name)]
 
 
 def running_pids() -> list[int]:
