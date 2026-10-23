@@ -1,9 +1,10 @@
 import json
-import os
 
 from k_optimizer import cli
 from k_optimizer.cleaner import CloseReport, RestoreReport
-from k_optimizer.models import Level, ProcInfo, Snapshot
+from k_optimizer.models import ProcInfo, Snapshot
+
+BS = chr(92)
 
 
 def mk(pid, name, exe, rss=50 * 1024 * 1024):
@@ -13,9 +14,9 @@ def mk(pid, name, exe, rss=50 * 1024 * 1024):
 SNAP = Snapshot(
     10.0, 1, 2, (),
     (
-        mk(1, "lsass.exe", r"D:\x\lsass.exe"),
-        mk(2, "discord.exe", r"D:\d\discord.exe"),
-        mk(3, "random.exe", r"D:\r\random.exe"),
+        mk(1, "lsass.exe", "C:" + BS + "Windows" + BS + "System32" + BS + "lsass.exe"),
+        mk(2, "CompatTelRunner.exe", "C:" + BS + "Windows" + BS + "System32" + BS + "CompatTelRunner.exe"),
+        mk(3, "random.exe", "D:" + BS + "r" + BS + "random.exe"),
     ),
 )
 
@@ -32,17 +33,18 @@ class FakeCleaner:
         return RestoreReport(("a.exe",), ())
 
 
-def run(argv, cleaner=None, tmp_path=None):
+def run(argv, cleaner=None, tmp_path=None, trim=lambda pids: 0, safe=("compattelrunner.exe",)):
     known = tmp_path / "k.json"
-    known.write_text(json.dumps({"safe": ["discord.exe"]}))
-    return cli.main(argv, snapshot_fn=lambda: SNAP, cleaner=cleaner or FakeCleaner(), known_path=known)
+    known.write_text(json.dumps({"safe": list(safe)}))
+    return cli.main(argv, snapshot_fn=lambda: SNAP, cleaner=cleaner or FakeCleaner(),
+                    known_path=known, trim_fn=trim)
 
 
 def test_scan_never_prints_protected_processes(capsys, tmp_path):
     assert run(["scan"], tmp_path=tmp_path) == 0
     out = capsys.readouterr().out
     assert "lsass.exe" not in out
-    assert "discord.exe" in out and "safe" in out
+    assert "CompatTelRunner.exe" in out and "safe" in out
     assert "random.exe" in out and "unknown" in out
 
 
@@ -66,7 +68,7 @@ def test_close_unknown_pid_is_reported_not_crashing(capsys, tmp_path):
     assert c.closed is None
 
 
-def test_close_protected_pid_is_not_offered_to_cleaner(capsys, tmp_path):
+def test_close_protected_pid_is_not_offered_to_cleaner(tmp_path):
     c = FakeCleaner()
     assert run(["close", "--pids", "1", "--yes"], c, tmp_path) == 1
     assert c.closed is None
@@ -77,17 +79,18 @@ def test_restore_prints_summary(capsys, tmp_path):
     assert "a.exe" in capsys.readouterr().out
 
 
-def test_boost_closes_only_safe_processes_without_prompt(capsys, tmp_path, monkeypatch):
+def test_boost_closes_only_windows_components_and_trims_without_prompt(capsys, tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("prompted")))
     c = FakeCleaner()
-    assert run(["boost"], c, tmp_path) == 0
+    trimmed = []
+    assert run(["boost"], c, tmp_path, trim=lambda pids: trimmed.append(list(pids)) or 5) == 0
     assert c.closed == [2]
-    assert "discord.exe" in capsys.readouterr().out.lower()
+    assert trimmed and 3 in trimmed[0]
+    out = capsys.readouterr().out
+    assert "CompatTelRunner.exe" in out
 
 
-def test_boost_with_nothing_to_close_is_ok(capsys, tmp_path):
+def test_boost_never_closes_user_apps_even_if_listed(tmp_path):
     c = FakeCleaner()
-    known = tmp_path / "k.json"
-    known.write_text(json.dumps({"safe": []}))
-    assert cli.main(["boost"], snapshot_fn=lambda: SNAP, cleaner=c, known_path=known) == 0
+    assert run(["boost"], c, tmp_path, safe=("random.exe",)) == 0
     assert c.closed is None

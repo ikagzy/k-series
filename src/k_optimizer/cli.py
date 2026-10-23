@@ -5,7 +5,7 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, monitor
+from k_optimizer import classifier, monitor, trimmer
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Level, ProcInfo, Snapshot
 
@@ -42,6 +42,7 @@ def main(
     snapshot_fn: Callable[[], Snapshot] = monitor.snapshot_after,
     cleaner: Cleaner | None = None,
     known_path: Path | None = None,
+    trim_fn: Callable[[list[int]], int] = trimmer.trim_all,
 ) -> int:
     ap = argparse.ArgumentParser(prog="k_optimizer")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -69,14 +70,15 @@ def main(
     snap = snapshot_fn()
     if args.cmd == "boost":
         targets = classifier.safe_targets(snap.processes, known, own_pids())
-        if not targets:
-            print("Kapatılacak gereksiz süreç yok.")
-            return 0
-        r = cleaner.close(targets)
-        freed = sum(p.rss_bytes for p in r.closed)
-        print(f"Kapatılan: {', '.join(sorted({p.name for p in r.closed})) or '-'} (~{_mb(freed)} RAM)")
-        for p, why in r.skipped:
-            print(f"Atlanan: {p.name} ({why})")
+        if targets:
+            r = cleaner.close(targets)
+            freed = sum(p.rss_bytes for p in r.closed)
+            print(f"Kapatılan Windows bileşenleri: {', '.join(sorted({p.name for p in r.closed})) or '-'} (~{_mb(freed)} RAM)")
+            for p, why in r.skipped:
+                print(f"Atlanan: {p.name} ({why})")
+        else:
+            print("Kapatılacak gereksiz Windows bileşeni yok.")
+        print(f"Bellek sıkıştırılan süreç: {trim_fn([p.pid for p in snap.processes])}")
         return 0
     listed = [(p, classify(p)) for p in snap.processes]
     listed = [(p, lv) for p, lv in listed if lv is not Level.PROTECTED]

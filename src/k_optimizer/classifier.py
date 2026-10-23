@@ -43,20 +43,49 @@ def default_known_apps() -> KnownApps:
     return KnownApps.load(_BUILTIN, user)
 
 
+def _norm(path: str) -> str:
+    return path.lower().replace("/", chr(92))
+
+
+def _under(exe: str, root: str) -> bool:
+    return _norm(exe).startswith(_norm(root).rstrip(chr(92)) + chr(92))
+
+
 def _in_windows_dir(exe: str) -> bool:
-    root = os.environ.get("SystemRoot", r"C:\Windows").lower().rstrip("\\")
-    return exe.lower().replace("/", "\\").startswith(root + "\\")
+    return _under(exe, os.environ.get("SystemRoot", "C:" + chr(92) + "Windows"))
+
+
+def _in_windows_components_dir(exe: str) -> bool:
+    """Where Windows' own optional components live: the Windows dir or the packaged-apps dir."""
+    apps = os.path.join(os.environ.get("ProgramFiles", "C:" + chr(92) + "Program Files"), "WindowsApps")
+    return _in_windows_dir(exe) or _under(exe, apps)
 
 
 def classify(p: ProcInfo, known: KnownApps, own_pids: frozenset[int]) -> Level:
-    if p.pid in own_pids or not p.exe or not os.path.isabs(p.exe) or _in_windows_dir(p.exe):
+    """SAFE means: a listed Windows component running from Windows' own folders. User apps never are."""
+    if p.pid in own_pids or not p.exe or not os.path.isabs(p.exe):
         return Level.PROTECTED
     name = p.name.lower()
     if name in _PROTECTED_NAMES:
         return Level.PROTECTED
-    return Level.SAFE if known.is_safe(name) else Level.UNKNOWN
+    if known.is_safe(name) and _in_windows_components_dir(p.exe):
+        return Level.SAFE
+    return Level.PROTECTED if _in_windows_dir(p.exe) else Level.UNKNOWN
 
 
-def safe_targets(procs: Iterable[ProcInfo], known: KnownApps, own_pids: frozenset[int]) -> list[ProcInfo]:
-    """Processes the one-button boost may close: only those classified SAFE."""
-    return [p for p in procs if classify(p, known, own_pids) is Level.SAFE]
+_MB = 1024 * 1024
+
+
+def _uses(p: ProcInfo, resource: str | None) -> bool:
+    if resource == "cpu":
+        return p.cpu_percent >= 0.5
+    if resource == "gpu":
+        return (p.gpu_percent or 0) > 0 or (p.vram_bytes or 0) >= 50 * _MB
+    return True  # "ram" or no filter: every safe process holds memory
+
+
+def safe_targets(
+    procs: Iterable[ProcInfo], known: KnownApps, own_pids: frozenset[int], resource: str | None = None
+) -> list[ProcInfo]:
+    """Processes a boost may close: only SAFE ones, optionally those using `resource` (cpu/ram/gpu)."""
+    return [p for p in procs if classify(p, known, own_pids) is Level.SAFE and _uses(p, resource)]
