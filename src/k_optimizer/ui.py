@@ -73,23 +73,42 @@ class Gauge:
             self.shown += (self.target - self.shown) * min(1.0, 0.25 / motion)
 
 
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("K-Optimizer")
-        self.resizable(False, False)
-        try:
-            self.iconbitmap(str(_ICON))
-        except tk.TclError:
-            pass
+def apply_window_theme(window: tk.Misc, pal: theme.Palette) -> None:
+    """Dark, palette-coloured title bar and rounded corners (Windows 11); fails soft elsewhere."""
+    window.configure(bg=pal.background)
+    try:
+        window.update_idletasks()
+        dwm = ctypes.windll.dwmapi
+        user32 = ctypes.windll.user32
+        user32.GetParent.restype = ctypes.c_void_p
+        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+
+        def colorref(c: str) -> ctypes.c_uint:
+            r, g, b = theme._rgb(c)
+            return ctypes.c_uint(r | g << 8 | b << 16)
+
+        for attr, value in ((20, ctypes.c_int(1)), (33, ctypes.c_int(2)),
+                            (35, colorref(pal.background)), (34, colorref(pal.outline)),
+                            (36, colorref(theme.TEXT))):
+            dwm.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), attr, ctypes.byref(value), ctypes.sizeof(value))
+    except (AttributeError, OSError):
+        pass
+
+
+class OptimizerPanel(tk.Frame):
+    """The RAM / GPU / CPU gauges. A plain Frame, so it can be the whole app or one page of K-Series."""
+
+    def __init__(self, master, pal_getter, motion_getter, show_header: bool = True,
+                 width: int = _W, height: int = _H, relaunch_args: str = "-m k_optimizer"):
+        super().__init__(master, bd=0, highlightthickness=0)
+        self._relaunch_args = relaunch_args
+        self._pal_getter, self._motion_getter, self._show_header = pal_getter, motion_getter, show_header
         families = set(tkfont.families())
         self._ui_font = next((f for f in theme.UI_FONTS if f in families), "Segoe UI")
         self._display_font = next((f for f in theme.DISPLAY_FONTS if f in families), "Segoe UI")
-        self.pal = theme.load()
-        self._motion = theme.motion_scale()
 
-        self.canvas = tk.Canvas(self, width=_W, height=_H, highlightthickness=0, bd=0)
-        self.canvas.pack()
+        self.canvas = tk.Canvas(self, width=width, height=height, highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<Motion>", self._on_motion)
         self.canvas.bind("<Leave>", lambda e: self._set_hover(None))
@@ -118,46 +137,15 @@ class App(tk.Tk):
         self._undo_ready = False
         self._gauges = {k: Gauge(k, k.upper()) for k in ("ram", "gpu", "cpu")}
         self._refresh_undo()
-        self._apply_window_theme()
 
         threading.Thread(target=self._worker, daemon=True).start()
-        self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(300, self._poll)
         self.after(200, self._track_foreground)
-        self.after(_THEME_POLL_MS, self._follow_theme)
         self.after(_FRAME_MS, self._frame)
 
-    # --- theme --------------------------------------------------------------
-    def _follow_theme(self):
-        pal = theme.load()
-        self._motion = theme.motion_scale()
-        if pal != self.pal:
-            self.pal = pal
-            self._apply_window_theme()
-        self.after(_THEME_POLL_MS, self._follow_theme)
-
-    def _apply_window_theme(self):
-        """Dark, palette-coloured title bar and rounded corners (Windows 11); fails soft elsewhere."""
-        p = self.pal
-        self.configure(bg=p.background)
-        self.canvas.configure(bg=p.background)
-        try:
-            self.update_idletasks()
-            dwm = ctypes.windll.dwmapi
-            user32 = ctypes.windll.user32
-            user32.GetParent.restype = ctypes.c_void_p
-            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
-
-            def colorref(c: str) -> ctypes.c_uint:
-                r, g, b = theme._rgb(c)
-                return ctypes.c_uint(r | g << 8 | b << 16)
-
-            for attr, value in ((20, ctypes.c_int(1)), (33, ctypes.c_int(2)),
-                                (35, colorref(p.background)), (34, colorref(p.outline)),
-                                (36, colorref(theme.TEXT))):
-                dwm.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), attr, ctypes.byref(value), ctypes.sizeof(value))
-        except (AttributeError, OSError):
-            pass
+    @property
+    def pal(self) -> theme.Palette:
+        return self._pal_getter()
 
     # --- drawing ---------------------------------------------------------------
     def _font(self, size, bold=False, display=False):
@@ -171,28 +159,43 @@ class App(tk.Tk):
                 break
             self._ram_done(parts)
         for g in self._gauges.values():
-            g.tick(self._motion)
-        self._draw()
+            g.tick(self._motion_getter())
+        if self.winfo_ismapped():  # no point painting a page nobody is looking at
+            self._draw()
         self.after(_FRAME_MS, self._frame)
+
+    def _layout(self) -> dict:
+        w = max(self.canvas.winfo_width(), 420)
+        h = max(self.canvas.winfo_height(), 320)
+        top, gap = (104 if self._show_header else 24), 20
+        card_w = min(280.0, (w - 2 * 32 - 2 * gap) / 3)
+        card_h = min(400.0, h - top - 96)
+        total = 3 * card_w + 2 * gap
+        return {"w": w, "h": h, "top": top, "gap": gap, "card_w": card_w, "card_h": card_h,
+                "total": total, "left": (w - total) / 2, "s": max(0.5, min(card_w / 280, card_h / 400))}
 
     def _draw(self):
         c, p = self.canvas, self.pal
+        c.configure(bg=p.background)
+        self.configure(bg=p.background)
         c.delete("all")
         self._regions = []
-        c.create_text(32, 38, anchor="w", text="K-OPTIMIZER", fill=p.primary, font=self._font(24, True, True))
-        c.create_text(32, 76, anchor="w", text="Windows'un gereksiz yükünü temizle", fill=theme.TEXT_MUTED,
-                      font=self._font(10))
-        total = 3 * _CARD_W + 2 * _CARD_GAP
-        left = (_W - total) / 2
+        lay = self._layout()
+        if self._show_header:
+            c.create_text(32, 38, anchor="w", text="K-OPTIMIZER", fill=p.primary, font=self._font(24, True, True))
+            c.create_text(32, 76, anchor="w", text="Windows'un gereksiz yükünü temizle", fill=theme.TEXT_MUTED,
+                          font=self._font(10))
         for i, key in enumerate(("ram", "gpu", "cpu")):
-            self._draw_card(self._gauges[key], left + i * (_CARD_W + _CARD_GAP))
-        y = _CARD_TOP + _CARD_H + 24
+            self._draw_card(self._gauges[key], lay["left"] + i * (lay["card_w"] + lay["gap"]), lay)
+        y = lay["top"] + lay["card_h"] + 20
         color = p.primary if self._result_ok else theme.TEXT_MUTED
-        c.create_text(left, y, anchor="nw", text=self._result, fill=color, width=total, font=self._font(10))
-        fy = _H - 30
+        c.create_text(lay["left"], y, anchor="nw", text=self._result, fill=color, width=lay["total"],
+                      font=self._font(10))
+        fy = lay["h"] - 26
         if not self._is_admin:
-            self._link("admin", left, fy, "🛡  Yönetici olarak aç", p.primary, "w")
-        self._link("undo", left + total, fy, "↶  Geri Al", p.primary if self._undo_ready else theme.TEXT_FAINT, "e")
+            self._link("admin", lay["left"], fy, "🛡  Yönetici olarak aç", p.primary, "w")
+        self._link("undo", lay["left"] + lay["total"], fy, "↶  Geri Al",
+                   p.primary if self._undo_ready else theme.TEXT_FAINT, "e")
 
     def _link(self, name, x, y, text, color, anchor):
         font = self._font(10, True, True)
@@ -202,45 +205,48 @@ class App(tk.Tk):
         x0, y0, x1, y1 = self.canvas.bbox(item)
         self._regions.append((name, (x0 - 6, y0 - 6, x1 + 6, y1 + 6)))
 
-    def _draw_card(self, g: Gauge, x0: float):
-        c, p = self.canvas, self.pal
-        y0, x1, y1 = _CARD_TOP, x0 + _CARD_W, _CARD_TOP + _CARD_H
+    def _draw_card(self, g: Gauge, x0: float, lay: dict):
+        c, p, sc = self.canvas, self.pal, lay["s"]
+        y0, x1, y1 = lay["top"], x0 + lay["card_w"], lay["top"] + lay["card_h"]
         c.create_polygon(round_rect_points(x0, y0, x1, y1, theme.RADIUS[3]), smooth=True,
                          fill=p.card, outline=p.outline, width=1)
-        cx, cy = (x0 + x1) / 2, y0 + 150
-        box = (cx - _DIAL_R, cy - _DIAL_R, cx + _DIAL_R, cy + _DIAL_R)
-        c.create_arc(*box, start=_START, extent=-_SWEEP, style="arc", outline=p.control, width=_DIAL_W)
+        r, dial_w = _DIAL_R * sc, max(8, round(_DIAL_W * sc))
+        cx, cy = (x0 + x1) / 2, y0 + 150 * sc
+        box = (cx - r, cy - r, cx + r, cy + r)
+        c.create_arc(*box, start=_START, extent=-_SWEEP, style="arc", outline=p.control, width=dial_w)
         frac = g.shown / 100 if g.available else 0.0
         step = _SWEEP / _SEGMENTS
         colors = theme.arc_colors(frac, p, _SEGMENTS)
         if frac > 0 and colors:
             c.create_arc(*box, start=_START, extent=-step * len(colors), style="arc",
-                         outline=theme.accent_soft(p), width=_DIAL_W + 10)
+                         outline=theme.accent_soft(p), width=dial_w + 10)
             for i, col in enumerate(colors):
                 c.create_arc(*box, start=_START - i * step, extent=-(step + 0.6), style="arc",
-                             outline=col, width=_DIAL_W)
-        c.create_text(cx, cy - 8, text=f"{g.shown:.0f}" if g.available else "—",
-                      fill=theme.TEXT if g.available else theme.TEXT_FAINT, font=self._font(46, True, True))
+                             outline=col, width=dial_w)
+        c.create_text(cx, cy - 8 * sc, text=f"{g.shown:.0f}" if g.available else "—",
+                      fill=theme.TEXT if g.available else theme.TEXT_FAINT,
+                      font=self._font(round(46 * sc), True, True))
         if g.available:
-            c.create_text(cx, cy + 40, text="%", fill=p.secondary, font=self._font(13, True, True))
-        c.create_text(cx, y0 + 282, text=g.label, fill=theme.TEXT, font=self._font(15, True, True))
-        c.create_text(cx, y0 + 304, text=g.sub, fill=theme.TEXT_MUTED, font=self._font(10))
-        self._draw_button(g.key, cx, y1 - 36, active=g.key == "cpu" and self._auto_balance)
+            c.create_text(cx, cy + 40 * sc, text="%", fill=p.secondary, font=self._font(13, True, True))
+        c.create_text(cx, y0 + 282 * sc, text=g.label, fill=theme.TEXT, font=self._font(15, True, True))
+        c.create_text(cx, y0 + 304 * sc, text=g.sub, fill=theme.TEXT_MUTED, font=self._font(10))
+        self._draw_button(g.key, cx, y1 - 36 * sc, sc, active=g.key == "cpu" and self._auto_balance)
 
-    def _draw_button(self, key: str, cx: float, cy: float, active: bool = False):
+    def _draw_button(self, key: str, cx: float, cy: float, sc: float = 1.0, active: bool = False):
         c, p = self.canvas, self.pal
-        r = 26
+        r = 26 * sc
         hover = self._hover == key
         fill = theme.blend(p.background, p.primary, 0.45 if active else 0.30 if hover else 0.14)
         if active:  # toggle is on: soft halo in the secondary colour
             c.create_oval(cx - r - 6, cy - r - 6, cx + r + 6, cy + r + 6, outline=p.secondary, width=2)
         c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=fill, outline=p.primary, width=2)
-        ox, oy = cx - 32, cy - 32  # broom drawn in a 64x64 box
-        c.create_line(ox + 44, oy + 14, ox + 31, oy + 33, fill=theme.TEXT, width=4, capstyle="round")
-        c.create_polygon(ox + 21, oy + 32, ox + 35, oy + 30, ox + 42, oy + 36, ox + 36, oy + 52,
-                         ox + 16, oy + 50, fill=p.primary, outline=p.primary)
+        ox, oy = cx - 32 * sc, cy - 32 * sc  # broom drawn in a 64x64 box
+        k = lambda v: v * sc
+        c.create_line(ox + k(44), oy + k(14), ox + k(31), oy + k(33), fill=theme.TEXT, width=4, capstyle="round")
+        c.create_polygon(ox + k(21), oy + k(32), ox + k(35), oy + k(30), ox + k(42), oy + k(36), ox + k(36),
+                         oy + k(52), ox + k(16), oy + k(50), fill=p.primary, outline=p.primary)
         for a, b in ((24, 21), (29, 27), (34, 33)):
-            c.create_line(ox + a, oy + 38, ox + b, oy + 49, fill=p.background, width=2)
+            c.create_line(ox + k(a), oy + k(38), ox + k(b), oy + k(49), fill=p.background, width=2)
         self._regions.append((key, (cx - r, cy - r, cx + r, cy + r)))
 
     def _hit(self, x, y) -> str | None:
@@ -419,16 +425,48 @@ class App(tk.Tk):
         if getattr(sys, "frozen", False):
             exe, params = sys.executable, ""
         else:
-            exe, params = sys.executable, "-m k_optimizer"
+            exe, params = sys.executable, self._relaunch_args
         if ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1) > 32:
-            self._close()  # the elevated copy takes over; declining the UAC prompt keeps this one open
+            self.winfo_toplevel().event_generate("<<KSeriesQuit>>")  # the elevated copy takes over
 
     def _refresh_undo(self):
         self._undo_ready = bool(self._cleaner.pending() or self._throttler.pending())
 
-    def _close(self):
+    def shutdown(self):
         self._stop.set()
         self._balancer.release_all()  # never leave processes slowed down after we exit
+
+
+class App(tk.Tk):
+    """Standalone K-Optimizer window: the panel plus theme following and the window chrome."""
+
+    def __init__(self):
+        super().__init__()
+        self.title("K-Optimizer")
+        self.resizable(False, False)
+        try:
+            self.iconbitmap(str(_ICON))
+        except tk.TclError:
+            pass
+        self.pal = theme.load()
+        self.motion = theme.motion_scale()
+        self.panel = OptimizerPanel(self, lambda: self.pal, lambda: self.motion)
+        self.panel.pack(fill="both", expand=True)
+        apply_window_theme(self, self.pal)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.bind("<<KSeriesQuit>>", lambda e: self._close())
+        self.after(_THEME_POLL_MS, self._follow_theme)
+
+    def _follow_theme(self):
+        pal = theme.load()
+        self.motion = theme.motion_scale()
+        if pal != self.pal:
+            self.pal = pal
+            apply_window_theme(self, pal)
+        self.after(_THEME_POLL_MS, self._follow_theme)
+
+    def _close(self):
+        self.panel.shutdown()
         self.destroy()
 
 

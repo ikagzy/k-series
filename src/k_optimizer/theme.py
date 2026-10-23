@@ -3,9 +3,11 @@
 K-Optimizer follows the theme the user picked in K-Launcher (%APPDATA%/K-Launcher/theme.txt) and its
 motion speed setting (motion.txt), so the two apps always look alike.
 """
-import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from k_optimizer import klauncher
 
 
 @dataclass(frozen=True)
@@ -63,34 +65,82 @@ RADIUS = (4, 8, 12, 16)
 _MOTION = {"fast": 0.55, "normal": 1.0, "slow": 1.6, "off": 0.0}
 
 
-def roaming_dir() -> Path:
-    return Path(os.environ.get("APPDATA", Path.home())) / "K-Launcher"
+_CACHE_SECONDS = 20.0
+_hint: Path | None = None
+_cache: tuple[float, Path | None] | None = None
+
+
+def set_launcher_hint(path: Path | None) -> None:
+    """A user-chosen K-Launcher location, tried right after a running copy."""
+    global _hint
+    _hint = path
+    reset_launcher_cache()
+
+
+def reset_launcher_cache() -> None:
+    global _cache
+    _cache = None
+
+
+def launcher_exe() -> Path | None:
+    """The K-Launcher whose settings we follow; cached because the theme is polled every couple of seconds."""
+    global _cache
+    now = time.monotonic()
+    if _cache is None or now - _cache[0] > _CACHE_SECONDS:
+        _cache = (now, klauncher.find_exe(saved=_hint, scan_roots=[]))
+    return _cache[1]
 
 
 def data_dirs() -> list[Path]:
-    local = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "K-Launcher"
-    return [roaming_dir(), local]
+    return klauncher.data_dirs(launcher_exe())
+
+
+def _read_setting(name: str, dirs: list[Path] | None = None) -> str | None:
+    for d in dirs if dirs is not None else data_dirs():
+        try:
+            return (d / name).read_text(encoding="utf-8").strip().lower()
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def load(theme_file: Path | None = None) -> Palette:
     """The palette selected in K-Launcher; the default when unset, unknown or unreadable."""
-    try:
-        name = (theme_file or roaming_dir() / "theme.txt").read_text(encoding="utf-8").strip().lower()
-    except (OSError, ValueError):
-        return PALETTES[DEFAULT_ID]
-    return PALETTES.get(name, PALETTES[DEFAULT_ID])
+    if theme_file is not None:
+        try:
+            name = theme_file.read_text(encoding="utf-8").strip().lower()
+        except (OSError, ValueError):
+            name = None
+    else:
+        name = _read_setting("theme.txt")
+    return PALETTES.get(name or "", PALETTES[DEFAULT_ID])
 
 
 def motion_scale(dirs: list[Path] | None = None) -> float:
     """K-Launcher's animation speed setting as a duration multiplier (0 = animations off)."""
-    for d in dirs if dirs is not None else data_dirs():
-        try:
-            word = (d / "motion.txt").read_text(encoding="utf-8").strip().lower()
-        except (OSError, ValueError):
-            continue
-        if word in _MOTION:
-            return _MOTION[word]
-    return 1.0
+    word = _read_setting("motion.txt", dirs)
+    return _MOTION.get(word or "", 1.0)
+
+
+def _write_setting(name: str, value: str) -> bool:
+    """Write where K-Launcher reads it: the folder that already has the file, else its current Data folder."""
+    dirs = data_dirs()
+    target = next((d for d in dirs if (d / name).is_file()), dirs[0])
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        (target / name).write_text(value, encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def save(palette_id: str) -> bool:
+    """Select a theme for every K app. False when the id is unknown or the file cannot be written."""
+    return palette_id in PALETTES and _write_setting("theme.txt", palette_id)
+
+
+def save_motion(word: str) -> bool:
+    return word.lower() in _MOTION and _write_setting("motion.txt", word.lower())
 
 
 def _rgb(c: str) -> tuple[int, int, int]:
