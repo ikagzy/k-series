@@ -42,7 +42,7 @@ Her bileşen tek bir iş yapar ve arayüzden bağımsız test edilir.
    - `unknown`: Gösterilir, işaretlenebilir, varsayılan olarak seçili gelmez.
    Sınıflandırma ad ve dosya yoluna göre yapılır (imzalı yayıncı doğrulaması ilk sürümde yok). Emin olunamayan süreç `unknown` olur, asla `safe` olmaz.
 3. **cleaner**: `close(processes)` önce süreci nazikçe kapatır (terminate), zaman aşımında zorla sonlandırır. Her kapatılan sürecin ad, yol ve komut satırını `session.json` kaydına yazar. `restore()` kayıttakileri yeniden başlatır. Korumalı bir süreç verilirse reddeder.
-4. **ui**: Üç parça. *Canlı Yük* (toplam grafikler ve süreç tablosu), *Temizlik* (öneri listesi, seçim, "Kapat", "Geri Al"), durum çubuğu (GPU desteği, yetki uyarısı).
+4. **ui**: Üç parça. *Canlı Yük* (toplam grafikler ve süreç tablosu), *Rahatlat* (tek RAHATLAT düğmesi: yalnızca `safe` süreçleri kapatır, elle seçim yok; "Geri Al"), durum çubuğu (GPU desteği, yetki uyarısı).
 
 ## Veri akışı
 
@@ -51,7 +51,8 @@ monitor → classifier → ui listesi → kullanıcı seçer → cleaner kapatı
 ## Güvenlik ve hata yönetimi
 
 - Korumalı süreç hem classifier'da hem cleaner'da ayrı ayrı engellenir (iki katmanlı).
-- Kapatmadan önce her zaman kullanıcı onayı alınır; kaç süreç ve yaklaşık ne kadar RAM boşalacağı gösterilir.
+- Tek tuş akışı: RAHATLAT yalnızca `safe` süreçleri, onay penceresi olmadan kapatır; sonuç (kaç süreç, ~RAM) gösterilir ve her şey "Geri Al" ile geri açılabilir. `unknown` süreçler hiçbir zaman otomatik kapatılmaz. CLI'da elle `close` komutu onay ister (`--yes` ile atlanır).
+- Beyaz liste yalnızca bağımsız uygulamaları içerir. Başka uygulamaların bağımlı olduğu ortak çalışma zamanları ve yardımcı süreçler (ör. `msedgewebview2.exe`, `steamwebhelper.exe`) listeye girmez; geri açma `--type=` taşıyan yardımcı süreçleri başlatmaz.
 - Yönetici izni olmadan çalışır. Erişim reddedilen süreçler atlanır ve "yetki gerekir" olarak işaretlenir.
 - Geri açma, süreç artık başlatılamıyorsa hatayı listeler, diğerlerine devam eder.
 - GPU sayaçları kullanılamıyorsa arayüz GPU sütununu "kullanılamıyor" gösterir.
