@@ -160,14 +160,16 @@ class App(tk.Tk):
 
         foot = tk.Frame(self, bg=BG)
         foot.pack(fill="x", padx=24, pady=(0, 16))
-        self._result = tk.Label(foot, text="", bg=BG, fg=MUTED, font=(_FONT, 10), anchor="w", justify="left")
-        self._result.pack(side="left", fill="x", expand=True)
+        self._result = tk.Label(foot, text="", bg=BG, fg=MUTED, font=(_FONT, 10), anchor="w", justify="left", wraplength=860)
+        self._result.pack(fill="x", pady=(0, 8))
+        actions = tk.Frame(foot, bg=BG)
+        actions.pack(fill="x")
         self._admin_link = None
         if not self._ramcleaner._ops.is_admin():
-            self._admin_link = tk.Label(foot, text="🛡 Yönetici olarak aç", bg=BG, fg=NEON, font=(_FONT, 10, "bold"), cursor="hand2")
-            self._admin_link.pack(side="right", padx=(0, 18))
+            self._admin_link = tk.Label(actions, text="🛡 Yönetici olarak aç", bg=BG, fg=NEON, font=(_FONT, 10, "bold"), cursor="hand2")
+            self._admin_link.pack(side="left")
             self._admin_link.bind("<Button-1>", lambda e: self._relaunch_as_admin())
-        self._undo = tk.Label(foot, text="↶ Geri Al", bg=BG, fg=MUTED, font=(_FONT, 10, "bold"), cursor="hand2")
+        self._undo = tk.Label(actions, text="↶ Geri Al", bg=BG, fg=MUTED, font=(_FONT, 10, "bold"), cursor="hand2")
         self._undo.pack(side="right")
         self._undo.bind("<Button-1>", lambda e: self._restore())
         self._refresh_undo()
