@@ -5,7 +5,7 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, cli, monitor, trimmer
+from k_optimizer import classifier, cli, monitor, throttle, trimmer
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
 
@@ -135,6 +135,9 @@ class App(tk.Tk):
         self._known = classifier.default_known_apps()
         self._classify = cli.make_classify(self._known)
         self._cleaner = Cleaner(cli.session_path(), self._classify)
+        self._throttler = throttle.Throttler(cli.session_path().with_name("throttle.json"))
+        self._own = cli.own_pids()
+        self._last_fg: int | None = None
         self._snap: Snapshot | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -162,6 +165,7 @@ class App(tk.Tk):
         threading.Thread(target=self._worker, daemon=True).start()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(300, self._poll)
+        self.after(200, self._track_foreground)
         self.after(_FRAME_MS, self._frame)
 
     def _worker(self):
@@ -183,6 +187,13 @@ class App(tk.Tk):
                 self._gauges[key].set(pct, sub)
         self.after(_INTERVAL_MS, self._poll)
 
+    def _track_foreground(self):
+        # Remember the last app the user was in that is not us, so a game they alt-tabbed from stays untouched.
+        fg = throttle.foreground_pid()
+        if fg and fg not in self._own:
+            self._last_fg = fg
+        self.after(400, self._track_foreground)
+
     def _frame(self):
         for g in self._gauges.values():
             g.tick()
@@ -203,28 +214,48 @@ class App(tk.Tk):
                 parts.append(f"Windows bileşeni kapatıldı: {names}")
             if any(why == "yetki gerekir" for _, why in r.skipped):
                 parts.append("bazıları için yönetici yetkisi gerekir")
+        if resource in ("cpu", "gpu"):
+            parts += self._throttle(snap, resource)
         if resource == "ram":
             trimmed = trimmer.trim_all(p.pid for p in snap.processes)
             time.sleep(0.4)
             freed = max(0, psutil.virtual_memory().available - before)
             parts.insert(0, f"~{freed / 1024**2:.0f} MB RAM boşaltıldı ({trimmed} sürecin belleği sıkıştırıldı)")
         if not parts:
-            parts = ["Kapatılacak gereksiz Windows bileşeni yok."]
-        self._result.configure(text=" · ".join(parts), fg=NEON if targets or resource == "ram" else MUTED)
+            parts = ["Düşürülecek veya kapatılacak gereksiz yük yok."]
+            ok = False
+        else:
+            ok = True
+        self._result.configure(text=" · ".join(parts), fg=NEON if ok else MUTED)
         self._refresh_undo()
 
+    def _throttle(self, snap: Snapshot, kind: str) -> list[str]:
+        exclude = throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
+        picked = throttle.pick_background(snap.processes, self._classify, self._own, exclude, kind)
+        if not picked:
+            return []
+        r = self._throttler.apply(picked, kind)
+        if not r.applied:
+            return []
+        names = ", ".join(sorted({p.name for p in r.applied}))
+        what = "CPU önceliği" if kind == "cpu" else "GPU önceliği"
+        return [f"Arka plan {what} düşürüldü: {names}"]
+
     def _restore(self):
-        if not self._cleaner.pending():
+        if not self._cleaner.pending() and not self._throttler.pending():
             return
         r = self._cleaner.restore()
+        n = self._throttler.restore()
         text = f"Geri açıldı: {', '.join(r.started) or '-'}"
+        if n:
+            text += f" · {n} sürecin önceliği eski haline getirildi"
         if r.failed:
             text += " · açılamadı: " + ", ".join(n for n, _ in r.failed)
         self._result.configure(text=text, fg=TEXT)
         self._refresh_undo()
 
     def _refresh_undo(self):
-        self._undo.configure(fg=NEON if self._cleaner.pending() else MUTED)
+        self._undo.configure(fg=NEON if self._cleaner.pending() or self._throttler.pending() else MUTED)
 
     def _close(self):
         self._stop.set()
