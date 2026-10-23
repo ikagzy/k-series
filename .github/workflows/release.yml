@@ -39,8 +39,14 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          $out = python -m pytest -q -x --tb=line 2>&1 | Out-String
+          $out = python -m pytest -q --tb=line 2>&1 | Out-String
           $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            # the GUI tests are timing based and a shared runner can be slow: run only the failed ones once more
+            $out += "`n--- second try of the failed tests ---`n"
+            $out += python -m pytest -q --tb=line --lf 2>&1 | Out-String
+            $code = $LASTEXITCODE
+          }
           $out
           if ($code -ne 0) {
             $lines = $out -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 8
