@@ -45,3 +45,23 @@ Aynı depoda yeni paket `k_series`, `k_optimizer` modüllerini kullanır (tema, 
 ## Test
 
 Algılama ve tema yolları geçici klasörlerle test edilir; arayüz sayfaları elle ve ekran görüntüsüyle doğrulanır.
+
+## Güncellemeler (GitHub Releases)
+
+K-Series, K-Launcher ve K-Optimizer'ın güncellemelerini GitHub Releases'ten denetler ve kurar.
+
+**Kaynak:** Her ürün için GitHub deposunun en son release'i (`/repos/{depo}/releases/latest`). Varsayılan depolar `ikagzy/k-launcher` ve `ikagzy/k-optimizer`; ayarlardan değiştirilebilir. Release henüz yoksa hata değil "yayın yok" durumudur.
+
+**Varlıklar (asset):** K-Launcher için tek parça taşınabilir `KLauncher*.exe` (K-Launcher kendini kuran tek exe olarak dağıtılıyor); K-Optimizer için `K-Series*.exe` (K-Optimizer K-Series'in içinde yerleşiktir, bu yüzden K-Optimizer güncellemesi = K-Series güncellemesi).
+
+**Güvenlik:**
+- Yalnızca `https` ve GitHub alan adları (`github.com`, `*.githubusercontent.com`).
+- Dosyanın SHA-256 karması zorunlu: release varlığının `digest` alanı veya yanındaki `<ad>.sha256` dosyası. Karma yoksa ya da uyuşmuyorsa indirilen dosya silinir ve kurulum yapılmaz.
+- Kurulumdan önce kullanıcıdan onay alınır (sürümler ve notlar gösterilir). "Kendiliğinden kur" seçeneği varsayılan olarak kapalıdır.
+- Çalışan K-Launcher zorla kapatılmaz: önce nazik kapatma istenir, kapanmazsa kullanıcıya söylenir.
+
+**Kurulum:**
+- K-Launcher: indirilen exe çalıştırılır; kendi başlatıcısı `%LOCALAPPDATA%\Programs\K-Launcher` içine kurar, yeniden açar ve taşınabilir kopyayı siler. Ayar (`Data`) klasörüne dokunulmaz.
+- K-Series: çalışan exe yeniden adlandırılır (`.old`), yenisi yerine konur, başlatılır; `.old` sonraki açılışta silinir. Başarısızlıkta eski ad geri verilir.
+
+**Test:** Ağ, dosya sistemi ve süreç işlemleri sahte nesnelerle test edilir; gerçek indirme yapılmaz.

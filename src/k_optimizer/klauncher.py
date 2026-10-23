@@ -127,3 +127,14 @@ def file_version(exe: Path) -> str | None:
         return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
     except (AttributeError, OSError, ValueError):
         return None
+
+
+def running_pids() -> list[int]:
+    out: list[int] = []
+    for p in psutil.process_iter(["name", "pid"]):
+        try:
+            if (p.info["name"] or "").lower() == EXE_NAME.lower():
+                out.append(p.info["pid"])
+        except psutil.Error:
+            continue
+    return out

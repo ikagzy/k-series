@@ -69,3 +69,24 @@ def test_saved_launcher_path_helper(tmp_path):
     exe = make_exe(tmp_path / "k")
     settings.save({"launcher_path": str(exe)}, f)
     assert settings.launcher_path(f) == exe
+
+
+def test_update_settings_have_safe_defaults_and_can_be_overridden(tmp_path):
+    f = tmp_path / "s.json"
+    assert settings.flag("auto_check", True, f) is True
+    assert settings.flag("auto_install", False, f) is False
+    settings.save({"auto_check": False, "auto_install": True}, f)
+    assert settings.flag("auto_check", True, f) is False
+    assert settings.flag("auto_install", False, f) is True
+    assert settings.repo("k-launcher", f) == "ikagzy/k-launcher"
+    settings.save({"repos": {"k-launcher": "someone/else"}}, f)
+    assert settings.repo("k-launcher", f) == "someone/else"
+    assert settings.repo("k-series", f) == "ikagzy/k-optimizer"
+
+
+def test_malformed_repo_setting_falls_back_to_the_default(tmp_path):
+    f = tmp_path / "s.json"
+    settings.save({"repos": {"k-launcher": "../../etc", "k-series": 42}, "auto_check": "yes"}, f)
+    assert settings.repo("k-launcher", f) == "ikagzy/k-launcher"
+    assert settings.repo("k-series", f) == "ikagzy/k-optimizer"
+    assert settings.flag("auto_check", True, f) is True  # non-boolean values are ignored

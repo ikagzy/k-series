@@ -5,16 +5,17 @@ launched from here, and settings (theme, motion) shared with K-Launcher through 
 """
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
 import webbrowser
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox, simpledialog
 
 from k_optimizer import theme
 from k_optimizer.ui import OptimizerPanel, apply_window_theme, round_rect_points
-from k_series import __version__, products, settings
+from k_series import __version__, products, settings, updater
 
 _W, _H = 1120, 720
 _SIDEBAR = 232
@@ -23,6 +24,8 @@ _THEME_POLL_MS = 2000
 _ICON = Path(__file__).resolve().parent.parent / "k_optimizer" / "assets" / "klauncher.ico"
 _ITCH = "https://itzkagzy.itch.io/k-launcher"
 _NAV = (("home", "Ana Sayfa"), ("optimizer", "K-Optimizer"), ("launcher", "K-Launcher"), ("settings", "Ayarlar"))
+_UPDATE_NAMES = {"k-launcher": "K-Launcher", "k-series": "K-Series (K-Optimizer dahil)"}
+_CARD_UPDATE = {"k-launcher": "k-launcher", "k-optimizer": "k-series"}  # card id -> update stream
 _MOTIONS = (("fast", "Hızlı"), ("normal", "Normal"), ("slow", "Yavaş"), ("off", "Kapalı"))
 
 
@@ -59,6 +62,14 @@ class KSeriesApp(tk.Tk):
         self._message = ""
         self._tick = 0
         self._motion_now = theme.motion_scale()
+        self._updates: dict[str, updater.Status] = {}
+        self._upd_q: queue.SimpleQueue = queue.SimpleQueue()
+        self._upd_done: queue.SimpleQueue = queue.SimpleQueue()
+        self._update_busy = False
+        self._check_pending = True
+        self._auto_tried: set[str] = set()
+        if getattr(sys, 'frozen', False):
+            updater.cleanup_old(Path(sys.executable))  # the copy we replaced during the last update
 
         self.optimizer = OptimizerPanel(self, lambda: self.pal, lambda: self.motion, show_header=False,
                                         width=_W - _SIDEBAR, height=_H, relaunch_args="-m k_series")
@@ -105,11 +116,119 @@ class KSeriesApp(tk.Tk):
                 self._scanning = False
             except queue.Empty:
                 break
+        if not self._scanning and self._check_pending and not self._preview:
+            self._check_pending = False
+            if settings.flag("auto_check", True):
+                self._check_updates()
+        self._drain_updates()
         self._tick += 1
         if self._page == "optimizer" and not self.optimizer.winfo_ismapped():
             self._goto("optimizer")
         self._draw()
         self.after(_FRAME_MS, self._frame)
+
+    # --- updates ------------------------------------------------------------------
+    def _local_version(self, upid: str) -> str | None:
+        if upid == "k-series":
+            return __version__
+        prod = self._product("k-launcher")
+        return prod.version if prod and prod.installed else None
+
+    def _check_updates(self, announce: bool = False):
+        if self._preview or self._update_busy:
+            return
+        jobs = {upid: (settings.repo(upid), self._local_version(upid)) for upid in ("k-launcher", "k-series")}
+        if announce:
+            self._message = "Güncellemeler denetleniyor…"
+
+        def work():
+            self._upd_q.put(({u: updater.check(u, repo, ver) for u, (repo, ver) in jobs.items()}, announce))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _summary(self) -> str:
+        parts = []
+        for upid, st in self._updates.items():
+            name = _UPDATE_NAMES[upid].split(" ")[0]
+            if st.state == "available":
+                parts.append(f"{name}: yeni sürüm {st.release.tag}")
+            elif st.state == "current":
+                parts.append(f"{name}: güncel")
+            elif st.state == "none":
+                parts.append(f"{name}: henüz yayın yok")
+            else:
+                parts.append(f"{name}: {st.message}")
+        return " · ".join(parts)
+
+    def _drain_updates(self):
+        while True:
+            try:
+                results, announce = self._upd_q.get_nowait()
+            except queue.Empty:
+                break
+            self._updates = results
+            if announce:
+                self._message = self._summary()
+            if settings.flag("auto_install", False) and not self._preview:
+                for upid, st in results.items():
+                    if st.state == "available" and upid not in self._auto_tried:
+                        self._auto_tried.add(upid)  # once per session, so a failing update cannot loop
+                        self._start_update(upid, ask=False)
+                        break
+        while True:
+            try:
+                message, quit_app, rescan = self._upd_done.get_nowait()
+            except queue.Empty:
+                break
+            self._update_busy = False
+            self._message = message
+            if rescan:
+                self.after(15000, self._rescan)
+            if quit_app:
+                self.after(600, self._close)
+
+    def _start_update(self, upid: str, ask: bool = True):
+        st = self._updates.get(upid)
+        if self._preview or self._update_busy or st is None or st.state != "available":
+            return
+        rel, name = st.release, _UPDATE_NAMES[upid]
+        if upid == "k-series" and not getattr(sys, "frozen", False):
+            self._message = "K-Series yalnızca exe sürümünde güncellenebilir."
+            return
+        launcher = self._product("k-launcher")
+        running = upid == "k-launcher" and launcher is not None and launcher.running
+        if running and not ask:
+            self._message = "K-Launcher açık olduğu için otomatik güncelleme beklemede; elle güncelleyebilirsin."
+            return
+        if ask:
+            local = self._local_version(upid) or "?"
+            text = f"{name}\n{local}  →  {rel.tag}\n\n{rel.notes.strip()[:300]}\n\n"
+            text += ("K-Launcher şu an açık; güncelleme için nazikçe kapatılacak.\n\n" if running else "")
+            text += "İndirilsin ve kurulsun mu?"
+            if not messagebox.askyesno("Güncelleme", text):
+                return
+        self._update_busy = True
+        threading.Thread(target=self._update_job, args=(upid, rel, name), daemon=True).start()
+
+    def _update_job(self, upid: str, rel: updater.Release, name: str):
+        dest = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "K-Series" / "updates"
+
+        def progress(done: int, total: int):
+            self._message = f"{name} indiriliyor… %{done * 100 // total}" if total else f"{name} indiriliyor…"
+
+        try:
+            path = updater.download(rel, dest, progress=progress)
+            self._message = f"{name} kuruluyor…"
+            if upid == "k-launcher":
+                updater.install_launcher(path)
+                self._upd_done.put((f"K-Launcher {rel.tag} kuruluyor, birkaç saniye içinde yeniden açılır.", False, True))
+            else:
+                updater.install_self(path, Path(sys.executable))
+                self._upd_done.put((f"K-Series {rel.tag} kuruldu, yeniden başlatılıyor…", True, False))
+        except updater.UpdateError as e:
+            self._upd_done.put((str(e), False, False))
+        except Exception as e:  # never leave the UI stuck in "busy"
+            self._upd_done.put((f"Güncelleme beklenmedik bir hatayla durdu: {e}", False, False))
 
     # --- drawing ------------------------------------------------------------------
     def _draw(self):
@@ -122,7 +241,7 @@ class KSeriesApp(tk.Tk):
         if self._page in page:  # the optimizer page is a panel laid over the content area
             page[self._page]()
         if self._message:
-            c.create_text(_SIDEBAR + 40, _H - 34, anchor="w", text=self._message, fill=p.primary,
+            c.create_text(_SIDEBAR + 40, _H - 24, anchor="w", text=self._message, fill=p.primary,
                           font=self._font(10), width=_W - _SIDEBAR - 80)
 
     def _region(self, key: tuple[str, str], box) -> None:
@@ -220,14 +339,29 @@ class KSeriesApp(tk.Tk):
             if prod.version:
                 c.create_text(x0 + card_w - 24, y0 + 116, anchor="e", text=f"v{prod.version}",
                               fill=theme.TEXT_MUTED, font=self._font(10))
-            by = y0 + card_h - 64
+            upid = _CARD_UPDATE.get(prod.id)
+            st = self._updates.get(upid) if upid else None
+            has_update = st is not None and st.state == "available"
+            if has_update:
+                c.create_text(x0 + 24, y0 + 146, anchor="w", text=f"↑ Yeni sürüm: {st.release.tag}",
+                              fill=p.secondary, font=self._font(10, True))
+            elif st is not None and st.state == "current":
+                c.create_text(x0 + 24, y0 + 146, anchor="w", text="Güncel", fill=theme.TEXT_FAINT,
+                              font=self._font(9))
+            by = y0 + card_h - 56
+            bx = x0 + 24
             if prod.builtin:
-                self._button(("goto", "optimizer"), x0 + 24, by, x0 + 24 + 150, by + 40, "Aç")
+                self._button(("goto", "optimizer"), bx, by, bx + 120, by + 40, "Aç")
+                bx += 130
             else:
-                self._button(("open", prod.id), x0 + 24, by, x0 + 24 + 150, by + 40,
+                self._button(("open", prod.id), bx, by, bx + 120, by + 40,
                              "Aç" if prod.installed else "Bulunamadı", enabled=prod.installed)
-                self._button(("goto", "launcher"), x0 + 24 + 162, by, x0 + 24 + 162 + 130, by + 40,
-                             "Ayrıntı", primary=False)
+                self._button(("goto", "launcher"), bx + 130, by, bx + 130 + 100, by + 40, "Ayrıntı", primary=False)
+                bx += 240
+            if has_update:
+                busy = self._update_busy
+                self._button(("update", upid), bx, by, bx + 120, by + 40, "Güncelle" if not busy else "Bekle…",
+                             enabled=not busy)
         self._button(("rescan", ""), x, 380, x + 150, 420, "Yeniden tara", primary=False)
         c.create_text(x + 170, 400, anchor="w", text="Kurulu ürünleri yeniden algılar", fill=theme.TEXT_FAINT,
                       font=self._font(9))
@@ -300,6 +434,28 @@ class KSeriesApp(tk.Tk):
         c.create_text(x, my + 96, anchor="w", width=_W - _SIDEBAR - 80, fill=theme.TEXT_FAINT, font=self._font(9),
                       text=f"Seçim {theme.data_dirs()[0]} klasörüne yazılır. K-Launcher bir sonraki açılışında bu "
                            "temayı kullanır; K-Series ve K-Optimizer hemen değişir.")
+        uy = my + 150
+        c.create_text(x, uy, anchor="w", text="GÜNCELLEMELER (GITHUB)", fill=theme.TEXT_MUTED,
+                      font=self._font(10, True, True))
+        for i, (key, label, default) in enumerate((("auto_check", "Açılışta denetle", True),
+                                                   ("auto_install", "Kendiliğinden kur", False))):
+            x0 = x + i * 246
+            on = settings.flag(key, default)
+            hover = self._hover == ("flag", key)
+            c.create_polygon(round_rect_points(x0, uy + 18, x0 + 232, uy + 58, theme.RADIUS[1]), smooth=True,
+                             fill=theme.accent_soft(p) if on else (p.control if hover else p.card),
+                             outline=p.primary if on else p.outline, width=2 if on else 1)
+            c.create_text(x0 + 116, uy + 38, text=("✓  " if on else "") + label,
+                          fill=p.primary if on else theme.TEXT, font=self._font(11, True, True))
+            self._region(("flag", key), (x0, uy + 18, x0 + 232, uy + 58))
+        self._button(("checknow", ""), x + 500, uy + 18, x + 500 + 150, uy + 58, "Şimdi denetle", primary=False,
+                     enabled=not self._update_busy)
+        for i, upid in enumerate(("k-launcher", "k-series")):
+            ry = uy + 86 + i * 30
+            c.create_text(x, ry, anchor="w", fill=theme.TEXT_MUTED, font=self._font(10),
+                          text=f"{_UPDATE_NAMES[upid].split(' ')[0]} deposu:")
+            c.create_text(x + 200, ry, anchor="w", fill=theme.TEXT, font=self._font(10), text=settings.repo(upid))
+            self._button(("repo", upid), x + 400, ry - 13, x + 400 + 100, ry + 13, "Değiştir", primary=False)
 
     # --- interaction --------------------------------------------------------------
     def _hit(self, x, y):
@@ -347,6 +503,32 @@ class KSeriesApp(tk.Tk):
             ok = theme.save_motion(arg)
             self.motion = theme.motion_scale()
             self._message = "" if ok else "Hareket ayarı yazılamadı."
+        elif kind == "update":
+            self._start_update(arg, ask=True)
+        elif kind == "checknow":
+            self._check_updates(announce=True)
+        elif kind == "flag":
+            defaults = {"auto_check": True, "auto_install": False}
+            ok = settings.save({**settings.load(), arg: not settings.flag(arg, defaults[arg])})
+            self._message = "" if ok else "Ayar kaydedilemedi."
+        elif kind == "repo":
+            self._change_repo(arg)
+
+    def _change_repo(self, upid: str):
+        value = simpledialog.askstring("GitHub deposu", f"{_UPDATE_NAMES[upid]} güncellemeleri hangi depodan gelsin?\n"
+                                       "(sahip/depo biçiminde, ör. ikagzy/k-launcher)", initialvalue=settings.repo(upid),
+                                       parent=self)
+        if value is None:
+            return
+        value = value.strip()
+        if not updater._REPO_RE.match(value):
+            self._message = "Geçersiz depo adı. 'sahip/depo' biçiminde yaz."
+            return
+        data = settings.load()
+        repos = data.get("repos") if isinstance(data.get("repos"), dict) else {}
+        ok = settings.save({**data, "repos": {**repos, upid: value}})
+        self._message = f"Depo kaydedildi: {value}" if ok else "Depo kaydedilemedi."
+        self._check_updates(announce=True)
 
     def _pick_launcher(self):
         path = filedialog.askopenfilename(title="KLauncher.exe seç", filetypes=[("K-Launcher", "KLauncher.exe"),

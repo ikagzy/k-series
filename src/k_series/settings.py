@@ -2,6 +2,7 @@
 here: they live in K-Launcher's folder so both apps share them."""
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -32,3 +33,21 @@ def save(data: dict, path: Path | None = None) -> bool:
 def launcher_path(path: Path | None = None) -> Path | None:
     value = load(path).get("launcher_path")
     return Path(value) if isinstance(value, str) and value else None
+
+
+DEFAULT_REPOS = {"k-launcher": "ikagzy/k-launcher", "k-series": "ikagzy/k-optimizer"}
+# GitHub owner: letters, digits and single hyphens, never starting with one. Repo: letters, digits, _ . -
+# but never "." or ".." (which would turn the API URL into a path traversal).
+REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$")
+
+
+def flag(name: str, default: bool, path: Path | None = None) -> bool:
+    value = load(path).get(name)
+    return value if isinstance(value, bool) else default
+
+
+def repo(product_id: str, path: Path | None = None) -> str:
+    """The GitHub repository to take a product's updates from; the default when unset or malformed."""
+    repos = load(path).get("repos")
+    value = repos.get(product_id) if isinstance(repos, dict) else None
+    return value if isinstance(value, str) and REPO_RE.match(value) else DEFAULT_REPOS[product_id]
