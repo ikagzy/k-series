@@ -10,7 +10,8 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, cli, icons, monitor, probalance, ramclean, theme, throttle, winutil
+from k_optimizer import (autoram, classifier, cli, icons, monitor, optsettings, probalance, ramclean, theme,
+                         throttle, winutil)
 from k_optimizer.chrome import apply_window_theme, round_rect_points  # noqa: F401  (re-exported)
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
@@ -99,6 +100,10 @@ class OptimizerPanel(tk.Frame):
         self._auto_balance = False
         self._last_tick_snap: Snapshot | None = None
         self._is_admin = self._ramcleaner._ops.is_admin()
+        saved = optsettings.load()
+        self._auto_ram = saved["auto_ram"]
+        self._autoram = autoram.AutoRam(threshold=saved["auto_ram_threshold"])
+        self._last_auto_snap: Snapshot | None = None
         self._ram_busy = False
         self._ram_again = False
         self._done: queue.SimpleQueue = queue.SimpleQueue()
@@ -127,10 +132,10 @@ class OptimizerPanel(tk.Frame):
     def _frame(self):
         while True:
             try:
-                parts = self._done.get_nowait()
+                parts, freed, auto = self._done.get_nowait()
             except queue.Empty:
                 break
-            self._ram_done(parts)
+            self._ram_done(parts, freed, auto)
         for g in self._gauges.values():
             g.tick(self._motion_getter())
         if self.winfo_ismapped():  # no point painting a page nobody is looking at
@@ -170,6 +175,13 @@ class OptimizerPanel(tk.Frame):
         self._link("undo", lay["left"] + lay["total"], fy, "↶  Geri Al",
                    p.primary if self._undo_ready else theme.TEXT_FAINT, "e")
 
+    def _tiny(self, name, x, y, text, color, anchor):
+        if self._hover == name:
+            color = theme.blend(color, "#FFFFFF", 0.25)
+        item = self.canvas.create_text(x, y, anchor=anchor, text=text, fill=color, font=self._font(9, True, True))
+        x0, y0, x1, y1 = self.canvas.bbox(item)
+        self._regions.append((name, (x0 - 4, y0 - 4, x1 + 4, y1 + 4)))
+
     def _link(self, name, x, y, text, color, anchor):
         font = self._font(10, True, True)
         if self._hover == name:
@@ -203,6 +215,12 @@ class OptimizerPanel(tk.Frame):
             c.create_text(cx, cy + 40 * sc, text="%", fill=p.secondary, font=self._font(13, True, True))
         c.create_text(cx, y0 + 282 * sc, text=g.label, fill=theme.TEXT, font=self._font(15, True, True))
         c.create_text(cx, y0 + 304 * sc, text=g.sub, fill=theme.TEXT_MUTED, font=self._font(10))
+        if g.key == "ram":
+            on = self._auto_ram
+            self._tiny("auto-ram", cx - 8, y0 + 326 * sc, ("● " if on else "○ ") + "Otomatik",
+                       p.primary if on else theme.TEXT_MUTED, "e")
+            self._tiny("auto-thr", cx + 8, y0 + 326 * sc, f"≥ %{self._autoram.threshold}",
+                       p.secondary if on else theme.TEXT_FAINT, "w")
         self._draw_button(g.key, cx, y1 - 36 * sc, sc, active=g.key == "cpu" and self._auto_balance)
 
     def _draw_button(self, key: str, cx: float, cy: float, sc: float = 1.0, active: bool = False):
@@ -241,6 +259,10 @@ class OptimizerPanel(tk.Frame):
         name = self._hit(e.x, e.y)
         if name in ("ram", "gpu", "cpu"):
             self._clean(name)
+        elif name == "auto-ram":
+            self._toggle_auto_ram()
+        elif name == "auto-thr":
+            self._cycle_threshold()
         elif name == "undo":
             self._restore()
         elif name == "admin":
@@ -270,6 +292,11 @@ class OptimizerPanel(tk.Frame):
             if self._auto_balance and snap is not self._last_tick_snap:
                 self._last_tick_snap = snap
                 self._balance(snap)
+            if self._auto_ram and snap is not self._last_auto_snap:
+                self._last_auto_snap = snap
+                used = summarize(snap)["ram"][0]
+                if not self._ram_busy and self._autoram.due(time.monotonic(), used):
+                    self._clean_ram(auto=True)
         self.after(_INTERVAL_MS, self._poll)
 
     def _foreground_group(self) -> frozenset[int]:
@@ -340,33 +367,60 @@ class OptimizerPanel(tk.Frame):
 
     # RAM cleaning runs off the UI thread so the button never freezes or needs a cooldown.
     # Clicks while a run is in flight are not dropped: one more run is queued right after it.
-    def _clean_ram(self):
+    def _clean_ram(self, auto: bool = False):
         if self._ram_busy:
-            self._ram_again = True
+            if not auto:
+                self._ram_again = True
             return
         with self._lock:
             snap = self._snap
         if snap is None:
             return
         self._ram_busy = True
-        threading.Thread(target=self._ram_job, args=(snap,), daemon=True).start()
+        threading.Thread(target=self._ram_job, args=(snap, auto), daemon=True).start()
 
-    def _ram_job(self, snap: Snapshot):
+    def _ram_job(self, snap: Snapshot, auto: bool = False):
+        freed = 0
         try:
-            parts = self._close_safe(snap, "ram")
+            # automatic runs only trim memory; closing Windows components is always the user's own click
+            parts = [] if auto else self._close_safe(snap, "ram")
             exclude = throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
             report = self._ramcleaner.clean(ramclean.cold_pids(snap.processes, exclude, self._own))
-            parts.insert(0, report.summary())
+            freed = report.freed_bytes
+            parts.insert(0, ("Otomatik RAM temizliği: " if auto else "") + report.summary())
         except Exception as e:  # never let a failed step kill the worker silently
             parts = [f"RAM temizliği hata verdi: {e}"]
-        self._done.put(parts)
+        self._done.put((parts, freed, auto))
 
-    def _ram_done(self, parts: list[str]):
+    def _ram_done(self, parts: list[str], freed: int = 0, auto: bool = False):
         self._ram_busy = False
+        self._autoram.record(time.monotonic(), freed)  # manual cleans restart the automatic interval too
         self._show(parts)
+        if auto and freed < 64 * 1024 * 1024:
+            self._result_ok = False  # a quiet "nothing to gain" is not worth a highlighted message
         if self._ram_again:
             self._ram_again = False
             self._clean_ram()
+
+    def _save_auto_ram(self) -> bool:
+        return optsettings.save({"auto_ram": self._auto_ram, "auto_ram_threshold": self._autoram.threshold})
+
+    def _toggle_auto_ram(self):
+        self._auto_ram = not self._auto_ram
+        ok = self._save_auto_ram()
+        if self._auto_ram:
+            text = (f"Otomatik RAM temizliği açık: bellek %{self._autoram.threshold} ve üstüne çıkınca boştaki "
+                    "arka plan süreçlerinin belleği sıkıştırılır (en sık dakikada bir, hiçbir şey kapatılmaz).")
+        else:
+            text = "Otomatik RAM temizliği kapatıldı."
+        self._result, self._result_ok = text + ("" if ok else " (ayar kaydedilemedi)"), self._auto_ram
+
+    def _cycle_threshold(self):
+        self._autoram.threshold = optsettings.next_threshold(self._autoram.threshold)
+        ok = self._save_auto_ram()
+        self._result = (f"Otomatik temizleme eşiği: %{self._autoram.threshold}" +
+                        ("" if ok else " (ayar kaydedilemedi)"))
+        self._result_ok = False
 
     def _throttle(self, snap: Snapshot, kind: str) -> list[str]:
         exclude = throttle.related_pids(self._last_fg) if self._last_fg else frozenset()
