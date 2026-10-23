@@ -73,3 +73,15 @@ def test_read_gpu_builds_reading_from_json(monkeypatch):
     assert r.adapters[0].luid == LUID
     assert r.adapters[0].utilization == 30.0
     assert r.adapters[0].dedicated_used_bytes == 8192
+
+
+def test_read_gpu_spawns_powershell_without_a_console_window(monkeypatch):
+    seen = {}
+
+    def run(*a, **k):
+        seen.update(k)
+        return subprocess.CompletedProcess(a, 1, "", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    gpu.read_gpu()
+    assert seen["creationflags"] & 0x08000000  # CREATE_NO_WINDOW

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from k_optimizer.models import GpuAdapter
 
+_NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: no flashing console on every poll
 _PID_LUID = re.compile(r"pid_(\d+)_luid_(0x[0-9A-Fa-f]+_0x[0-9A-Fa-f]+)")
 _LUID = re.compile(r"luid_(0x[0-9A-Fa-f]+_0x[0-9A-Fa-f]+)")
 _ENGTYPE = re.compile(r"engtype_(\w+)")
@@ -77,6 +78,7 @@ def read_gpu() -> GpuReading | None:
         run = subprocess.run(
             ["powershell", "-NoProfile", "-Command", _SCRIPT],
             capture_output=True, text=True, timeout=20,
+            creationflags=_NO_WINDOW,
         )
         if run.returncode != 0:
             return None
