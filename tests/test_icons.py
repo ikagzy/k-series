@@ -22,7 +22,7 @@ def test_every_theme_has_a_ready_made_ico_with_standard_sizes():
 def test_each_app_has_its_own_logo_and_k_launcher_keeps_its_theme_icons():
     pal = theme.PALETTES["amber-orange"]
     ko, ks, kl = (icons.icon_for(pal, a) for a in ("ko", "ks", "kl"))
-    assert ko.parent.name == "ko" and ks.parent.name == "ks" and kl.parent.name == "ThemeIcons"
+    assert ko.parent.name == "ko" and ks.parent.name == "ks" and kl.parent.name == "kl"
     assert len({ko.read_bytes(), ks.read_bytes(), kl.read_bytes()}) == 3
 
 

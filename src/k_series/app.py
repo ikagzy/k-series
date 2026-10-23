@@ -351,7 +351,7 @@ class KSeriesApp(tk.Tk):
                                    fill=p.card, outline=p.outline, width=1)
 
     def _logo(self, x, y, size, pid: str = "k-series"):
-        """The product's logo in the current theme (KO, KL = K-Launcher's own ThemeIcons, KS) at the given size."""
+        """The product's logo in the current theme (KO, KL, KS) at the given size."""
         img = icons.photo(self, self.pal, size, _LOGO_SETS.get(pid, "ks"))
         if img is not None:
             self.canvas.create_image(x, y, image=img, anchor="nw")

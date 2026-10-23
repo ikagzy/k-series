@@ -1,6 +1,7 @@
 """Turn the KO / KS logo PNGs (one per theme) into .ico files for src/k_optimizer/assets/AppIcons/<app>/.
 
-Usage: python tools/make_app_icons.py ko <folder with ko-<theme>.png> ; python tools/make_app_icons.py ks <folder>
+Usage: python tools/make_app_icons.py ko <folder with ko-<theme>.png> ; ... ks <folder> ; ... kl <folder with
+k-launcher-<theme>-transparent.png> (K-Launcher's logos, shown on its card in K-Series)
 Needs Pillow (a build-time tool only; the apps themselves do not use it). Themes without a logo reuse `aurora`.
 """
 import shutil
@@ -29,8 +30,10 @@ def main(app: str, src: Path) -> None:
     dest = OUT / app
     dest.mkdir(parents=True, exist_ok=True)
     for theme in THEMES:
-        png = src / f"{app}-{theme}.png"
-        if png.is_file():
+        png = next((f for f in (src / f"{app}-{theme}.png", src / f"k-launcher-{theme}-transparent.png",
+                                src / f"k-launcher-{theme.replace('emerald-cyan', 'green')}-transparent.png") if f.is_file()),
+                   None) if app != "ko" and app != "ks" else src / f"{app}-{theme}.png"
+        if png is not None and png.is_file():
             big = square(Image.open(png)).resize((256, 256), Image.LANCZOS)
             big.save(dest / f"{theme}.ico", sizes=[(s, s) for s in SIZES])
     for theme in THEMES:
