@@ -1,6 +1,7 @@
 import json
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 
 from k_optimizer.models import GpuAdapter
@@ -93,3 +94,25 @@ def read_gpu() -> GpuReading | None:
         return GpuReading(per_pid, vram, adapters)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return None
+
+
+class GpuCache:
+    """Reads the GPU counters at most every `max_age` seconds. Each read starts a PowerShell, which cost more
+    than everything else a snapshot does, and the GPU gauge does not need a fresh value every second."""
+
+    def __init__(self, max_age: float = 4.0, now=time.monotonic):
+        self.max_age, self._now = max_age, now
+        self._value: GpuReading | None = None
+        self._at: float | None = None
+
+    def get(self) -> GpuReading | None:
+        t = self._now()
+        if self._at is None or t - self._at >= self.max_age:
+            self._value, self._at = read_gpu(), t  # a failure (None) is cached too
+        return self._value
+
+    def clear(self) -> None:
+        self._value, self._at = None, None
+
+
+shared_cache = GpuCache()

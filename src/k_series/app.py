@@ -8,19 +8,21 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
+import traceback
 import tkinter.font as tkfont
 import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 
-from k_optimizer import icons, klauncher, theme
+from k_optimizer import icons, klauncher, theme, trimmer
 from k_optimizer.chrome import apply_window_theme, round_rect_points
 from k_series import __version__, products, settings, shortcuts, updater
 
 _W, _H = 1120, 720
 _SIDEBAR = 232
-_FRAME_MS = 33
+_FRAME_MS = 50
 _THEME_POLL_MS = 2000
 _ITCH = "https://itzkagzy.itch.io/k-launcher"
 _NAV = (("home", "Ana Sayfa"), ("k-optimizer", "K-Optimizer"), ("k-launcher", "K-Launcher"), ("settings", "Ayarlar"))
@@ -68,6 +70,9 @@ class KSeriesApp(tk.Tk):
         self._update_busy = False
         self._check_pending = True
         self._auto_tried: set[str] = set()
+        self._rev = 0  # bumped by every click so settings changes are repainted
+        self._last_sig = None
+        self._last_trim = time.monotonic() - 18  # first trim about 2 s after start, then every 20 s
         if getattr(sys, "frozen", False):
             updater.cleanup_old(Path(sys.executable))  # the copy we replaced during the last update
 
@@ -139,23 +144,45 @@ class KSeriesApp(tk.Tk):
         return next((p for p in self._products if p.id == pid), None)
 
     def _frame(self):
-        while True:
-            try:
-                self._products = self._scan_q.get_nowait()
-                self._scanning = False
-                opt = self._product("k-optimizer")
-                if opt and opt.path:
-                    updater.cleanup_old(opt.path)  # the copy replaced during the last update
-            except queue.Empty:
-                break
-        if not self._scanning and self._check_pending and not self._preview:
-            self._check_pending = False
-            if settings.flag("auto_check", True):
-                self._check_updates()
-        self._drain_updates()
-        self._tick += 1
-        self._draw()
-        self.after(_FRAME_MS, self._frame)
+        try:
+            while True:
+                try:
+                    self._products = self._scan_q.get_nowait()
+                    self._scanning = False
+                    opt = self._product("k-optimizer")
+                    if opt and opt.path:
+                        updater.cleanup_old(opt.path)  # the copy replaced during the last update
+                except queue.Empty:
+                    break
+            if not self._scanning and self._check_pending and not self._preview:
+                self._check_pending = False
+                if settings.flag("auto_check", True):
+                    self._check_updates()
+            self._drain_updates()
+            self._tick += 1
+            sig = self._signature()
+            if sig != self._last_sig:  # repainting an unchanged window cost ~30% of a core
+                self._last_sig = sig
+                self._draw()
+            self._maybe_trim(time.monotonic())
+        except Exception:  # one bad frame must never freeze the window for good
+            traceback.print_exc()
+        finally:
+            self.after(_FRAME_MS, self._frame)
+
+    def _signature(self):
+        """Everything that changes what is on screen. Equal signature, equal picture: nothing to repaint."""
+        prods = tuple((p.id, p.installed, p.running, p.version, str(p.path)) for p in self._products)
+        ups = tuple(sorted((k, v.state, v.release.tag if v.release else "") for k, v in self._updates.items()))
+        dots = (self._tick // 10) % 3 if self._scanning else -1  # the "aranıyor..." dots
+        return (self._page, self._hover, self._message, self._scanning, dots, prods, ups, self._update_busy,
+                self.pal.id, self._rev)
+
+    def _maybe_trim(self, now: float):
+        """Hand idle memory back to Windows now and then, the way K-Launcher keeps itself at a few MB."""
+        if now - self._last_trim >= 20:
+            self._last_trim = now
+            trimmer.empty_working_set(os.getpid())
 
     # --- updates ------------------------------------------------------------------
     def _local_version(self, upid: str) -> str | None:
@@ -540,6 +567,7 @@ class KSeriesApp(tk.Tk):
         if key is None:
             return
         kind, arg = key
+        self._rev += 1
         if kind in ("nav", "goto"):
             return self._goto(arg)
         if self._preview:

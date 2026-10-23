@@ -85,3 +85,39 @@ def test_read_gpu_spawns_powershell_without_a_console_window(monkeypatch):
     monkeypatch.setattr(subprocess, "run", run)
     gpu.read_gpu()
     assert seen["creationflags"] & 0x08000000  # CREATE_NO_WINDOW
+
+
+# --- caching: a PowerShell per snapshot was the heaviest thing the app did ---------------------------------
+def test_cached_reading_is_reused_within_the_max_age_and_refreshed_after_it(monkeypatch):
+    calls = []
+    clock = {"t": 100.0}
+    monkeypatch.setattr(gpu, "read_gpu", lambda: calls.append(1) or gpu.GpuReading({}, {}, ()))
+    cache = gpu.GpuCache(max_age=4.0, now=lambda: clock["t"])
+    first = cache.get()
+    clock["t"] = 103.0
+    assert cache.get() is first and len(calls) == 1
+    clock["t"] = 104.5
+    assert cache.get() is not first and len(calls) == 2
+
+
+def test_a_failed_reading_is_also_cached_so_a_broken_wmi_is_not_hammered(monkeypatch):
+    calls = []
+    clock = {"t": 0.0}
+    monkeypatch.setattr(gpu, "read_gpu", lambda: calls.append(1))
+    cache = gpu.GpuCache(max_age=4.0, now=lambda: clock["t"])
+    assert cache.get() is None and cache.get() is None
+    assert len(calls) == 1
+    clock["t"] = 5.0
+    cache.get()
+    assert len(calls) == 2
+
+
+def test_monitor_snapshot_uses_the_shared_cache_by_default(monkeypatch):
+    from k_optimizer import monitor
+
+    calls = []
+    monkeypatch.setattr(gpu, "read_gpu", lambda: calls.append(1))
+    gpu.shared_cache.clear()
+    monitor.snapshot()
+    monitor.snapshot()
+    assert len(calls) == 1

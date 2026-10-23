@@ -4,6 +4,7 @@ import queue
 import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
@@ -11,20 +12,20 @@ from pathlib import Path
 import psutil
 
 from k_optimizer import (autoram, classifier, cli, icons, monitor, optsettings, probalance, ramclean, theme,
-                         throttle, winutil)
+                         throttle, trimmer, winutil)
 from k_optimizer.chrome import apply_window_theme, round_rect_points  # noqa: F401  (re-exported)
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
 
 _INTERVAL_MS = 1500
-_FRAME_MS = 33
+_FRAME_MS = 40
 _THEME_POLL_MS = 2000
 
 _START, _SWEEP = 225, 270  # speedtest-style dial: bottom-left, clockwise over the top
 _W, _H = 940, 640
 _CARD_W, _CARD_H, _CARD_GAP, _CARD_TOP = 280, 400, 20, 104
 _DIAL_R, _DIAL_W = 100, 14
-_SEGMENTS = 54
+_SEGMENTS = 36
 
 
 def _gb(n: int) -> str:
@@ -63,7 +64,7 @@ class Gauge:
         self.sub = sub
 
     def tick(self, motion: float):
-        if motion <= 0 or abs(self.target - self.shown) < 0.2:
+        if motion <= 0 or abs(self.target - self.shown) < 1.0:  # jitter snaps; only real changes sweep
             self.shown = self.target
         else:
             self.shown += (self.target - self.shown) * min(1.0, 0.25 / motion)
@@ -105,6 +106,10 @@ class OptimizerPanel(tk.Frame):
         self._autoram = autoram.AutoRam(interval=saved["auto_ram_interval"])
         self._last_auto_snap: Snapshot | None = None
         self._ram_busy = False
+        self._visible = True  # False while minimised: nothing to show, so nothing to measure
+        self._tick = 0
+        self._last_sig = None
+        self._last_trim = time.monotonic() - 18  # first trim about 2 s after start, then every 20 s
         self._ram_again = False
         self._done: queue.SimpleQueue = queue.SimpleQueue()
         self._snap: Snapshot | None = None
@@ -129,18 +134,52 @@ class OptimizerPanel(tk.Frame):
     def _font(self, size, bold=False, display=False):
         return (self._display_font if display else self._ui_font, size, "bold" if bold else "normal")
 
+    def _is_shown(self) -> bool:
+        return bool(self.winfo_ismapped())  # a page nobody is looking at is not painted
+
+    def _check_visible(self) -> bool:
+        """False while the window is minimised or hidden (Tk unmaps it): then nothing needs measuring or painting."""
+        try:
+            return self._is_shown()
+        except Exception:
+            return True
+
+    def _signature(self):
+        """Everything that changes what the panel shows. Equal signature, equal picture."""
+        gauges = tuple((round(g.shown), g.available, g.sub) for g in self._gauges.values())  # whole points: finer is invisible
+        return (gauges, self._result, self._result_ok, self._undo_ready, self._hover, self._auto_balance,
+                self._auto_ram, self._autoram.interval, self._ram_busy, self.pal.id,
+                self.canvas.winfo_width(), self.canvas.winfo_height())
+
+    def _maybe_trim(self, now: float):
+        """Hand idle memory back to Windows now and then, the way K-Launcher keeps itself at a few MB."""
+        if now - self._last_trim >= 20:
+            self._last_trim = now
+            trimmer.empty_working_set(os.getpid())
+
     def _frame(self):
-        while True:
-            try:
-                parts, freed, auto = self._done.get_nowait()
-            except queue.Empty:
-                break
-            self._ram_done(parts, freed, auto)
-        for g in self._gauges.values():
-            g.tick(self._motion_getter())
-        if self.winfo_ismapped():  # no point painting a page nobody is looking at
-            self._draw()
-        self.after(_FRAME_MS, self._frame)
+        try:
+            while True:
+                try:
+                    parts, freed, auto = self._done.get_nowait()
+                except queue.Empty:
+                    break
+                self._ram_done(parts, freed, auto)
+            for g in self._gauges.values():
+                g.tick(self._motion_getter())
+            self._tick += 1
+            if self._tick % 10 == 0:
+                self._visible = self._check_visible()
+            if self._is_shown():
+                sig = self._signature()
+                if sig != self._last_sig:  # repainting an unchanged window is pure waste
+                    self._last_sig = sig
+                    self._draw()
+            self._maybe_trim(time.monotonic())
+        except Exception:  # one bad frame must never freeze the window for good
+            traceback.print_exc()
+        finally:
+            self.after(_FRAME_MS, self._frame)
 
     def _layout(self) -> dict:
         w = max(self.canvas.winfo_width(), 420)
@@ -271,10 +310,12 @@ class OptimizerPanel(tk.Frame):
     # --- data -------------------------------------------------------------
     def _worker(self):
         while not self._stop.is_set():
-            try:
-                snap = monitor.snapshot_after(0.5)
-            except Exception:  # keep the dials alive if one sample fails
-                snap = None
+            snap = None
+            if self._visible or self._auto_ram or self._auto_balance:
+                try:
+                    snap = monitor.snapshot_after(0.5)
+                except Exception:  # keep the dials alive if one sample fails
+                    snap = None
             if snap is not None:
                 with self._lock:
                     self._snap = snap
@@ -367,6 +408,8 @@ class OptimizerPanel(tk.Frame):
     # RAM cleaning runs off the UI thread so the button never freezes or needs a cooldown.
     # Clicks while a run is in flight are not dropped: one more run is queued right after it.
     def _clean_ram(self, auto: bool = False):
+        if auto and os.environ.get("K_OPTIMIZER_PREVIEW"):
+            return  # preview mode is look-only: nothing happens on its own either
         if self._ram_busy:
             if not auto:
                 self._ram_again = True

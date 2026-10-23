@@ -38,3 +38,15 @@ def test_unavailable_gauge_reports_no_percent():
     g = ui.Gauge("gpu", "GPU")
     g.set(None, "okunamıyor")
     assert g.available is False and g.target == 0.0
+
+
+def test_small_changes_snap_instead_of_animating_and_big_ones_still_sweep():
+    g = ui.Gauge("cpu", "CPU")
+    g.set(25.0, "x")
+    g.tick(0.0)           # arrive at 25
+    g.set(25.8, "x")      # CPU jitter of under a point: one repaint at most, not a half-second sweep
+    g.tick(1.0)
+    assert g.shown == 25.8
+    g.set(70.0, "x")      # a real change still sweeps
+    g.tick(1.0)
+    assert 25.8 < g.shown < 70.0

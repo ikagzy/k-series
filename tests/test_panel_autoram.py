@@ -204,3 +204,12 @@ def test_the_controls_appear_on_the_ram_card_only(env):
     draw(env)
     keys = [k for k, _ in env.panel._regions]
     assert keys.count("auto-ram") == 1 and keys.count("auto-int") == 1
+
+
+def test_preview_mode_never_cleans_on_its_own_even_if_auto_is_saved_on(env, monkeypatch):
+    monkeypatch.setenv("K_OPTIMIZER_PREVIEW", "1")
+    env.panel._auto_ram = True  # as if it had been switched on in an earlier real run
+    env.poll_at(0, used_pct=95)
+    env.poll_at(20, used_pct=95)
+    env.pump(n=30)
+    assert env.state["cleans"] == []

@@ -1,3 +1,4 @@
+import os
 import time
 import tkinter as tk
 import types
@@ -431,3 +432,64 @@ def test_choosing_an_optimizer_location_is_remembered(ks, monkeypatch, tmp_path)
     assert click(ks, ("pick", "k-optimizer"))
     assert ksettings.optimizer_path() == exe
     assert pump(ks, lambda: any(p.path == exe for p in ks._products))
+
+
+# --- being light: draw only on change, trim the working set -----------------------------------------------------
+def draws_during(a, monkeypatch, frames=60):
+    count = []
+    original = a._draw
+    monkeypatch.setattr(a, "_draw", lambda: (count.append(1), original())[1])
+    pump(a, lambda: False, n=frames)
+    return len(count)
+
+
+def test_an_idle_hub_does_not_redraw_at_all(ks, monkeypatch):
+    scan_done(ks)
+    pump(ks, lambda: False, n=40)  # let the startup activity settle
+    assert draws_during(ks, monkeypatch, frames=60) == 0
+
+
+def test_the_hub_redraws_when_something_actually_changes(ks, monkeypatch):
+    scan_done(ks)
+    pump(ks, lambda: False, n=40)
+    assert (ks._set_hover(("nav", "settings")) or draws_during(ks, monkeypatch, 15)) >= 1  # hover
+    pump(ks, lambda: False, n=10)
+    ks._goto("settings")
+    assert draws_during(ks, monkeypatch, 15) >= 1                                           # page
+    ks._message = "merhaba"
+    assert draws_during(ks, monkeypatch, 15) >= 1                                           # message
+    ks._theme_changed(theme.PALETTES["aurora"])
+    assert draws_during(ks, monkeypatch, 15) >= 1                                           # theme
+    ks._products = [launcher_product(running=True)]
+    assert draws_during(ks, monkeypatch, 15) >= 1                                           # detection result
+
+
+def test_the_scanning_animation_still_moves_while_it_is_scanning(ks, monkeypatch):
+    scan_done(ks)
+    pump(ks, lambda: False, n=40)
+    ks._scanning = True
+    ks._goto("home")
+    assert draws_during(ks, monkeypatch, frames=120) >= 2  # the dots advance about three times a second
+    ks._scanning = False
+
+
+def test_a_click_that_changes_settings_is_repainted(ks, monkeypatch):
+    scan_done(ks)
+    ks._goto("settings")
+    pump(ks, lambda: False, n=40)
+    assert click(ks, ("flag", "auto_install"))
+    assert draws_during(ks, monkeypatch, 15) >= 1
+
+
+def test_it_trims_its_own_working_set_now_and_then_like_k_launcher_does(ks, monkeypatch):
+    trimmed = []
+    monkeypatch.setattr(kapp.trimmer, "empty_working_set", lambda pid: trimmed.append(pid) or True)
+    ks._last_trim = 0.0
+    ks._maybe_trim(10)
+    assert trimmed == []
+    ks._maybe_trim(20)
+    assert trimmed == [os.getpid()]
+    ks._maybe_trim(30)
+    assert len(trimmed) == 1
+    ks._maybe_trim(40)
+    assert len(trimmed) == 2

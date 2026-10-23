@@ -20,3 +20,31 @@ def isolate_k_launcher(tmp_path, monkeypatch):
     theme.set_launcher_hint(None)
     yield
     theme.set_launcher_hint(None)
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """No test may reach the real GitHub: the update module's network opener always fails fast.
+    (Tests that exercise downloads pass their own fake opener.)"""
+    from urllib.error import URLError
+
+    from k_series import updater
+
+    def blocked(*args, **kwargs):
+        raise URLError("network is blocked in tests")
+
+    monkeypatch.setattr(updater, "urlopen", blocked)
+
+
+@pytest.fixture(autouse=True)
+def hidden_windows(monkeypatch):
+    """Tests build real Tk windows; they must never appear on the developer's screen."""
+    import tkinter
+
+    original = tkinter.Tk.__init__
+
+    def hidden_init(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        self.withdraw()  # before the first update(), so it is never drawn
+
+    monkeypatch.setattr(tkinter.Tk, "__init__", hidden_init)

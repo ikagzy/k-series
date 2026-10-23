@@ -78,10 +78,11 @@ def _get(url: str, opener, timeout: float, accept: str = "*/*"):
     return opener(request, timeout=timeout)
 
 
-def fetch_latest(repo: str, asset_pattern: str, opener=urlopen, timeout: float = 10) -> Release | None:
+def fetch_latest(repo: str, asset_pattern: str, opener=None, timeout: float = 10) -> Release | None:
     """The newest published release of `repo` with a matching asset, or None when there is none yet."""
     if not _REPO_RE.match(repo or ""):
         raise UpdateError(f"Geçersiz GitHub deposu: {repo!r} (sahip/depo biçiminde olmalı)")
+    opener = opener or urlopen  # looked up at call time, so tests can cut the network off in one place
     try:
         with _get(f"https://api.github.com/repos/{repo}/releases/latest", opener, timeout,
                   "application/vnd.github+json") as resp:
@@ -125,7 +126,7 @@ def _checksum(asset: dict, assets: list[dict], opener, timeout: float) -> str | 
     return None
 
 
-def check(product_id: str, repo: str, local_version: str | None, opener=urlopen) -> Status:
+def check(product_id: str, repo: str, local_version: str | None, opener=None) -> Status:
     try:
         rel = fetch_latest(repo, ASSET_PATTERNS[product_id], opener)
     except UpdateError as e:
@@ -139,13 +140,14 @@ def check(product_id: str, repo: str, local_version: str | None, opener=urlopen)
 
 
 # --- downloading ------------------------------------------------------------------------------
-def download(release: Release, dest_dir: Path, opener=urlopen,
+def download(release: Release, dest_dir: Path, opener=None,
              progress: Callable[[int, int], None] | None = None, timeout: float = 30) -> Path:
     """Download the asset into dest_dir. The SHA-256 must be known and must match, else nothing is kept."""
     if not _allowed_host(release.url):
         raise UpdateError("İndirme adresi güvenli değil (yalnızca https GitHub adresleri kabul edilir).")
     if not release.sha256:
         raise UpdateError("Bu sürümün SHA-256 doğrulama karması yok; güvenlik için kurulmadı.")
+    opener = opener or urlopen
     name = Path(release.asset_name.replace("\\", "/")).name
     dest_dir.mkdir(parents=True, exist_ok=True)
     final, part = dest_dir / name, dest_dir / (name + ".part")
