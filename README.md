@@ -1,11 +1,11 @@
 # K-Series
 
-Windows için iki uygulama:
+Two apps for Windows:
 
-- **K-Optimizer**: RAM, CPU ve GPU yükünü azaltır. Hiçbir uygulamanı kapatmaz, yaptığı her değişiklik geri alınabilir.
-- **K-Series**: K-Launcher ve K-Optimizer'ı tek yerden bulur, açar ve GitHub Releases üzerinden günceller. Tema ayarlarını K-Launcher ile paylaşır.
+- **K-Optimizer**: Reduces the load on RAM, GPU and CPU. Doesnt close any apps, if it does you can revert the changes.
+- **K-Series**: It can find K-Launcher and K-Optimizer, can run and updates from GitHub releases. Shares the same Themes settings.
 
-## Çalıştırma
+## Make it run
 
 ```
 pip install -r requirements.txt
@@ -15,6 +15,6 @@ python kseries_launcher.py    # K-Series
 python -m pytest
 ```
 
-## Yayınlama
+## Release
 
 Bkz. [docs/RELEASING.md](docs/RELEASING.md).
