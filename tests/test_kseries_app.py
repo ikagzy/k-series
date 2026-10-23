@@ -131,7 +131,7 @@ def available(tag="v4.1.0", pid_name="KLauncher.exe"):
     return updater.Status("available", rel)
 
 
-def pump(a, until, n=300):
+def pump(a, until, n=1500):
     for _ in range(n):
         a.update()
         if until():

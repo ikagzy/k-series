@@ -11,7 +11,7 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import (autoram, classifier, cli, gpupref, icons, monitor, optsettings, probalance, ramclean,
+from k_optimizer import (autoram, classifier, cli, gpupref, i18n, icons, monitor, optsettings, probalance, ramclean,
                          theme, throttle, trimmer, winutil)
 from k_optimizer.chrome import apply_window_theme, round_rect_points  # noqa: F401  (re-exported)
 from k_optimizer.cleaner import Cleaner
@@ -49,6 +49,15 @@ def summarize(snap: Snapshot) -> dict[str, tuple[float | None, str]]:
     return out
 
 
+class _Canvas(tk.Canvas):
+    """A canvas whose text is shown in the interface language."""
+
+    def create_text(self, *args, **kw):
+        if isinstance(kw.get("text"), str):
+            kw["text"] = i18n.t(kw["text"])
+        return super().create_text(*args, **kw)
+
+
 class Gauge:
     """Animated dial state; drawing lives in App so every item shares one canvas."""
 
@@ -83,7 +92,7 @@ class OptimizerPanel(tk.Frame):
         self._ui_font = next((f for f in theme.UI_FONTS if f in families), "Segoe UI")
         self._display_font = next((f for f in theme.DISPLAY_FONTS if f in families), "Segoe UI")
 
-        self.canvas = tk.Canvas(self, width=width, height=height, highlightthickness=0, bd=0)
+        self.canvas = _Canvas(self, width=width, height=height, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<Motion>", self._on_motion)
@@ -156,7 +165,7 @@ class OptimizerPanel(tk.Frame):
     def _static_signature(self):
         """Everything else on screen; when this changes the whole window is rebuilt."""
         return (self._result, self._result_ok, self._undo_ready, self._hover, self._auto_balance,
-                self._auto_ram, self._autoram.interval, self._ram_busy, self.pal.id,
+                self._auto_ram, self._autoram.interval, self._ram_busy, self.pal.id, i18n.current(),
                 self.canvas.winfo_width(), self.canvas.winfo_height())
 
     def _maybe_trim(self, now: float):
@@ -590,6 +599,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("K-Optimizer")
         self.resizable(False, False)
+        i18n.follow()
         self.pal = theme.load()
         icons.apply_window_icon(self, self.pal)  # K-Launcher's own theme icon
         self.motion = theme.motion_scale()
@@ -607,6 +617,7 @@ class App(tk.Tk):
             self.pal = pal
             apply_window_theme(self, pal)
             icons.apply_window_icon(self, pal)
+        i18n.follow()  # the language is chosen in K-Series; the next repaint (signature) shows it
         self.after(_THEME_POLL_MS, self._follow_theme)
 
     def _close(self):

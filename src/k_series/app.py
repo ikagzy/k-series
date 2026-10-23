@@ -18,7 +18,8 @@ from tkinter import filedialog, messagebox, simpledialog
 
 from k_optimizer import icons, klauncher, theme, trimmer
 from k_optimizer.chrome import apply_window_theme, round_rect_points
-from k_series import __version__, i18n, products, settings, shortcuts, updater
+from k_optimizer import i18n
+from k_series import __version__, products, settings, shortcuts, updater
 
 _W, _H = 1120, 720
 _SIDEBAR = 232

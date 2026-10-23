@@ -4,7 +4,8 @@ import types
 import pytest
 
 from k_series import app as kapp
-from k_series import i18n, settings, updater
+from k_optimizer import i18n
+from k_series import settings, updater
 
 
 def test_english_swaps_known_phrases_and_leaves_the_rest_alone():
@@ -87,3 +88,49 @@ def test_clicking_elsewhere_closes_the_dropdown(ks):
     assert ks._lang_open
     click(ks, ("motion", "fast"))
     assert not ks._lang_open
+
+
+def test_word_boundaries_stop_short_phrases_matching_inside_longer_words():
+    i18n.set_language("en")
+    assert i18n.t("Güncelleme") == "Update"
+    assert i18n.t("Güncellemeler") == "Güncellemeler"  # not a known phrase: untouched, never "Updateler"
+    assert i18n.t("her 10 sn") == "every 10 s"
+
+
+def test_optimizer_messages_are_translated():
+    i18n.set_language("en")
+    assert i18n.t("~120 MB RAM boşaldı (5 boşta süreç) · temizlenen: çalışma kümeleri") == \
+        "~120 MB RAM freed (5 idle processes) · cleaned: working sets"
+    assert i18n.t("Otomatik RAM temizliği kapatıldı.") == "Automatic RAM cleaning turned off."
+
+
+def test_the_optimizer_follows_the_language_k_series_saved(tmp_path):
+    assert i18n.follow() is False and i18n.current() == "tr"
+    assert settings.save({"language": "en"})
+    assert i18n.follow() is True and i18n.current() == "en"
+    assert i18n.follow() is False
+
+
+def test_the_optimizer_panel_draws_in_english(monkeypatch):
+    import tkinter as tk
+
+    from k_optimizer import theme, ui
+    from k_optimizer.models import Snapshot
+
+    monkeypatch.setattr(ui.monitor, "sample", lambda interval=0.5: Snapshot(5.0, 8 * 1024**3, 32 * 1024**3, (), ()))
+    settings.save({"language": "en"})
+    i18n.follow()
+    try:
+        root = tk.Tk()
+    except tk.TclError as e:
+        pytest.skip(f"no Tk display: {e}")
+    panel = ui.OptimizerPanel(root, lambda: theme.PALETTES["amber-orange"], lambda: 1.0)
+    try:
+        panel._draw()
+        c = panel.canvas
+        texts = [c.itemcget(i, "text") for i in c.find_all() if c.type(i) == "text"]
+        assert "↶  Undo" in texts and "Clear Windows' unnecessary load" in texts
+        assert not any("Geri Al" in x for x in texts)
+    finally:
+        panel.shutdown()
+        root.destroy()

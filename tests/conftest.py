@@ -53,7 +53,7 @@ def hidden_windows(monkeypatch):
 @pytest.fixture(autouse=True)
 def turkish_by_default(monkeypatch):
     """K-Series picks its language from the settings, else the system; tests start in Turkish on every machine."""
-    from k_series import i18n
+    from k_optimizer import i18n
 
     monkeypatch.setattr(i18n, "system_default", lambda: "tr")
     i18n.set_language("tr")
