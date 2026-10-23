@@ -38,7 +38,15 @@ jobs:
 
       - name: Test
         shell: pwsh
-        run: python -m pytest -q
+        run: |
+          $out = python -m pytest -q -x --tb=short 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $out
+          if ($code -ne 0) {
+            $tail = ($out -split "`n" | Select-Object -Last 40) -join "%0A"
+            "::error title=pytest failed::$tail"
+            exit $code
+          }
 
       - name: Build executables
         shell: pwsh
