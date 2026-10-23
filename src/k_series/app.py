@@ -83,6 +83,7 @@ class KSeriesApp(tk.Tk):
         self._upd_done: queue.SimpleQueue = queue.SimpleQueue()
         self._update_busy = False
         self._check_pending = True
+        self._force_check = False
         self._auto_tried: set[str] = set()
         self._rev = 0  # bumped by every click so settings changes are repainted
         self._last_sig = None
@@ -150,6 +151,13 @@ class KSeriesApp(tk.Tk):
         threading.Thread(target=lambda: self._scan_q.put(
             products.detect(saved=saved, saved_optimizer=saved_opt, extra_dirs=extra)), daemon=True).start()
 
+    def _rescan_and_recheck(self):
+        """After an install: look at the installed versions again, then ask GitHub again, so a finished update
+        stops being offered."""
+        self._rescan()
+        self._force_check = True
+        self._check_pending = True
+
     def _goto(self, page: str):
         self._page = page
         self._message = ""
@@ -170,7 +178,8 @@ class KSeriesApp(tk.Tk):
                     break
             if not self._scanning and self._check_pending and not self._preview:
                 self._check_pending = False
-                if settings.flag("auto_check", True):
+                if settings.flag("auto_check", True) or self._force_check:
+                    self._force_check = False
                     self._check_updates()
             self._drain_updates()
             self._tick += 1
@@ -257,7 +266,7 @@ class KSeriesApp(tk.Tk):
             self._update_busy = False
             self._message = message
             if rescan:
-                self.after(rescan, self._rescan)
+                self.after(rescan, self._rescan_and_recheck)
             if quit_app:
                 self.after(600, self._close)
 

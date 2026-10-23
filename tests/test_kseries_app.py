@@ -493,3 +493,20 @@ def test_it_trims_its_own_working_set_now_and_then_like_k_launcher_does(ks, monk
     assert len(trimmed) == 1
     ks._maybe_trim(40)
     assert len(trimmed) == 2
+
+
+def test_a_finished_update_is_no_longer_offered(ks, monkeypatch):
+    scan_done(ks)
+    ks._products = [optimizer_product()]
+    ks._updates = {"k-optimizer": available("v1.0.1", "K-Optimizer.exe")}
+    checked = []
+
+    def fake_check(pid, repo, local, opener=None):
+        checked.append((pid, local))
+        return updater.Status("current")
+
+    monkeypatch.setattr(kapp.products, "detect", lambda **kw: [optimizer_product(version="1.0.1.0")])
+    monkeypatch.setattr(updater, "check", fake_check)
+    ks._upd_done.put(("K-Optimizer v1.0.1 hazır.", False, 10))
+    assert pump(ks, lambda: ("k-optimizer", "1.0.1.0") in checked)  # asked again, with the new installed version
+    assert pump(ks, lambda: ks._updates.get("k-optimizer") and ks._updates["k-optimizer"].state == "current")
