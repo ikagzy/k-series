@@ -1,4 +1,4 @@
-import struct
+﻿import struct
 
 import pytest
 
@@ -16,7 +16,7 @@ def test_every_theme_has_a_ready_made_ico_with_standard_sizes():
         sizes = {raw[6 + 16 * i] or 256 for i in range(count)}
         assert {16, 32, 256} <= sizes, (pal.id, sizes)
         seen.add(raw)
-    assert len(seen) >= len(theme.PALETTES) - 1  # emerald-cyan reuses the aurora logo until it has its own
+    assert len(seen) == len(theme.PALETTES)  # seven different logos
 
 
 def test_each_app_has_its_own_logo_and_k_launcher_keeps_its_theme_icons():
