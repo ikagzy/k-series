@@ -1,0 +1,19 @@
+[project]
+name = "k-optimizer"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["psutil", "customtkinter"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+k_optimizer = ["data/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
