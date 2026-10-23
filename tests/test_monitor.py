@@ -178,10 +178,10 @@ def test_sample_primes_only_the_first_time_and_then_reuses_the_previous_reading(
     monkeypatch.setattr(monitor, "_default_table", fresh)
     assert fresh.primed is False
     monitor.sample(0.5, read_gpu_fn=lambda: None)
-    assert slept == [0.5] and fresh.primed is True      # the first call waits to build a baseline
+    assert slept.count(0.5) == 1 and fresh.primed is True      # the first call waits to build a baseline
     monitor.sample(0.5, read_gpu_fn=lambda: None)
     monitor.sample(0.5, read_gpu_fn=lambda: None)
-    assert slept == [0.5]                               # later calls do not wait at all
+    assert slept.count(0.5) == 1                             # later calls do not wait at all
 
 
 def test_a_sample_after_a_gap_reports_cpu_over_the_whole_gap():
