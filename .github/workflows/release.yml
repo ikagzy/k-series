@@ -39,12 +39,12 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          $out = python -m pytest -q -x --tb=short 2>&1 | Out-String
+          $out = python -m pytest -q -x --tb=line 2>&1 | Out-String
           $code = $LASTEXITCODE
           $out
           if ($code -ne 0) {
-            $tail = ($out -split "`n" | Select-Object -Last 40) -join "%0A"
-            "::error title=pytest failed::$tail"
+            $lines = $out -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 8
+            foreach ($l in $lines) { "::error title=pytest::$($l.Trim())" }
             exit $code
           }
 
