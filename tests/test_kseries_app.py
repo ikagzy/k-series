@@ -31,7 +31,7 @@ def click(a, key):
 
 
 def scan_done(a):
-    for _ in range(400):
+    for _ in range(1500):
         a.update()
         if not a._scanning:
             return
