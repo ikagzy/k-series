@@ -50,6 +50,7 @@ def main(
     c.add_argument("--pids", required=True)
     c.add_argument("--yes", action="store_true")
     sub.add_parser("restore")
+    sub.add_parser("boost")
     args = ap.parse_args(argv)
 
     known = (
@@ -66,6 +67,17 @@ def main(
         return 0
 
     snap = snapshot_fn()
+    if args.cmd == "boost":
+        targets = classifier.safe_targets(snap.processes, known, own_pids())
+        if not targets:
+            print("Kapatılacak gereksiz süreç yok.")
+            return 0
+        r = cleaner.close(targets)
+        freed = sum(p.rss_bytes for p in r.closed)
+        print(f"Kapatılan: {', '.join(sorted({p.name for p in r.closed})) or '-'} (~{_mb(freed)} RAM)")
+        for p, why in r.skipped:
+            print(f"Atlanan: {p.name} ({why})")
+        return 0
     listed = [(p, classify(p)) for p in snap.processes]
     listed = [(p, lv) for p, lv in listed if lv is not Level.PROTECTED]
 

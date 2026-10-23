@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 from k_optimizer.models import Level, ProcInfo
@@ -54,3 +55,8 @@ def classify(p: ProcInfo, known: KnownApps, own_pids: frozenset[int]) -> Level:
     if name in _PROTECTED_NAMES:
         return Level.PROTECTED
     return Level.SAFE if known.is_safe(name) else Level.UNKNOWN
+
+
+def safe_targets(procs: Iterable[ProcInfo], known: KnownApps, own_pids: frozenset[int]) -> list[ProcInfo]:
+    """Processes the one-button boost may close: only those classified SAFE."""
+    return [p for p in procs if classify(p, known, own_pids) is Level.SAFE]

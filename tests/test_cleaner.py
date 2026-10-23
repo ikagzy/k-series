@@ -121,3 +121,16 @@ def test_corrupt_store_is_treated_as_empty(tmp_path):
     c, _ = make(tmp_path, {})
     assert c.pending() == ()
     assert c.restore().started == ()
+
+
+def test_restore_skips_chromium_style_helper_children(tmp_path):
+    launched = []
+    procs = {1: FakeProc(1), 2: FakeProc(2)}
+    c, _ = make(tmp_path, procs, launched=launched)
+    main = mk(1, "app.exe", r"C:\app.exe")
+    helper = ProcInfo(2, "app.exe", r"C:\app.exe", (r"C:\app.exe", "--type=renderer"), 1.0, 0.0, 1, None, None)
+    c.close([main, helper])
+    r = c.restore()
+    assert len(launched) == 1
+    assert "--type=renderer" not in launched[0][0]
+    assert c.pending() == ()

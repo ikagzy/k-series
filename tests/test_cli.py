@@ -75,3 +75,19 @@ def test_close_protected_pid_is_not_offered_to_cleaner(capsys, tmp_path):
 def test_restore_prints_summary(capsys, tmp_path):
     assert run(["restore"], tmp_path=tmp_path) == 0
     assert "a.exe" in capsys.readouterr().out
+
+
+def test_boost_closes_only_safe_processes_without_prompt(capsys, tmp_path, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("prompted")))
+    c = FakeCleaner()
+    assert run(["boost"], c, tmp_path) == 0
+    assert c.closed == [2]
+    assert "discord.exe" in capsys.readouterr().out.lower()
+
+
+def test_boost_with_nothing_to_close_is_ok(capsys, tmp_path):
+    c = FakeCleaner()
+    known = tmp_path / "k.json"
+    known.write_text(json.dumps({"safe": []}))
+    assert cli.main(["boost"], snapshot_fn=lambda: SNAP, cleaner=c, known_path=known) == 0
+    assert c.closed is None

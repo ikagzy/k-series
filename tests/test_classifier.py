@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from k_optimizer.classifier import KnownApps, classify
+from k_optimizer.classifier import KnownApps, classify, safe_targets
 from k_optimizer.models import Level, ProcInfo
 
 
@@ -71,3 +71,21 @@ def test_corrupt_builtin_raises(tmp_path):
 @pytest.mark.parametrize("exe", ["", "MemCompression"])
 def test_non_absolute_or_empty_exe_is_protected(known, exe):
     assert classify(proc("MemCompression", exe), known, frozenset()) is Level.PROTECTED
+
+
+def test_safe_targets_returns_only_safe_processes(known):
+    procs = (
+        proc("Discord.exe", r"D:\d.exe", pid=1),
+        proc("random.exe", r"D:\x\random.exe", pid=2),
+        proc("lsass.exe", r"D:\l.exe", pid=3),
+    )
+    got = safe_targets(procs, known, frozenset())
+    assert [p.pid for p in got] == [1]
+
+
+def test_builtin_whitelist_excludes_shared_runtimes_and_helper_processes():
+    from k_optimizer.classifier import _BUILTIN
+
+    k = KnownApps.load(_BUILTIN, None)
+    for name in ("msedgewebview2.exe", "steamwebhelper.exe", "svchost.exe", "explorer.exe"):
+        assert not k.is_safe(name)

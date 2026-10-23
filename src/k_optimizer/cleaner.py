@@ -100,6 +100,8 @@ class Cleaner:
         failed: list[tuple[str, str]] = []
         remaining: list[dict] = []
         for p in self.pending():
+            if any(a.startswith("--type=") for a in p.cmdline):
+                continue  # Chromium/Electron helper child: relaunching it alone is meaningless
             argv = list(p.cmdline) or ([p.exe] if p.exe else [])
             cwd = os.path.dirname(p.exe) if p.exe else None
             try:
