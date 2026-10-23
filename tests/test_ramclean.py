@@ -95,3 +95,34 @@ def test_real_ops_never_raise_without_privileges():
         assert ops.memory_list(ramclean.PURGE_LOW_STANDBY) is False
         assert ops.flush_file_cache() is False
     assert ops.trim_working_sets([]) == 0
+
+
+def test_enabling_privileges_never_raises_even_without_them():
+    ops = ramclean.WinMemOps()
+    assert isinstance(ops._enable("SeProfileSingleProcessPrivilege"), bool)
+    assert isinstance(ops._enable("SeIncreaseQuotaPrivilege"), bool)
+    assert isinstance(ops.enable_privileges(), bool)
+
+
+def test_a_step_that_raises_is_recorded_as_failed_and_the_rest_still_run():
+    class Boom(FakeOps):
+        def flush_file_cache(self):
+            self.calls.append("file_cache")
+            raise OverflowError("int too long to convert")
+
+    ops = Boom(admin=True)
+    rep = ramclean.RamCleaner(ops).clean([1])
+    assert ops.calls == ["privileges", "working_sets", "file_cache", "modified", "low_standby"]
+    assert rep.steps["file_cache"] is False and rep.steps["modified"] is True
+
+
+def test_privilege_enabling_that_raises_degrades_to_working_sets_only():
+    class Boom(FakeOps):
+        def enable_privileges(self):
+            self.calls.append("privileges")
+            raise OverflowError("boom")
+
+    ops = Boom(admin=True)
+    rep = ramclean.RamCleaner(ops).clean([1])
+    assert ops.calls == ["privileges", "working_sets"]
+    assert rep.steps == {"working_sets": True}

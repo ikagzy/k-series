@@ -60,8 +60,22 @@ class WinMemOps:
 
     def _enable(self, name: str) -> bool:
         try:
-            adv, k32 = ctypes.windll.advapi32, ctypes.windll.kernel32
+            # Explicit argtypes: handles are 64-bit, and GetCurrentProcess() returns -1 (a pseudo handle)
+            # which ctypes would otherwise try to squeeze into a 32-bit int.
+            adv = ctypes.WinDLL("advapi32", use_last_error=True)
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
             k32.GetCurrentProcess.restype = wintypes.HANDLE
+            k32.GetCurrentProcess.argtypes = []
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+            adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+            adv.OpenProcessToken.restype = wintypes.BOOL
+            adv.LookupPrivilegeValueW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.POINTER(_Luid)]
+            adv.LookupPrivilegeValueW.restype = wintypes.BOOL
+            adv.AdjustTokenPrivileges.argtypes = [
+                wintypes.HANDLE, wintypes.BOOL, ctypes.POINTER(_TokenPrivileges),
+                wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p,
+            ]
+            adv.AdjustTokenPrivileges.restype = wintypes.BOOL
             token = wintypes.HANDLE()
             if not adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(token)):
                 return False
@@ -70,11 +84,12 @@ class WinMemOps:
                 if not adv.LookupPrivilegeValueW(None, name, ctypes.byref(luid)):
                     return False
                 tp = _TokenPrivileges(1, (_LuidAndAttributes * 1)(_LuidAndAttributes(luid, 0x2)))
+                ctypes.set_last_error(0)
                 adv.AdjustTokenPrivileges(token, False, ctypes.byref(tp), 0, None, None)
-                return k32.GetLastError() == 0  # 1300 = privilege not held by this token
+                return ctypes.get_last_error() == 0  # 1300 = privilege not held by this token
             finally:
                 k32.CloseHandle(token)
-        except (AttributeError, OSError):
+        except (AttributeError, OSError, ctypes.ArgumentError, OverflowError):
             return False
 
     def enable_privileges(self) -> bool:
@@ -125,19 +140,26 @@ class RamCleaner:
     def __init__(self, ops: WinMemOps | None = None):
         self._ops = ops or WinMemOps()
 
+    @staticmethod
+    def _attempt(step) -> bool:
+        try:
+            return bool(step())
+        except Exception:  # one broken step must never stop the others
+            return False
+
     def clean(self, pids) -> RamReport:
         ops = self._ops
         before = ops.available_bytes()
         steps: dict[str, bool] = {}
         admin = ops.is_admin()
-        privileged = admin and ops.enable_privileges()
+        privileged = admin and self._attempt(ops.enable_privileges)
         trimmed = ops.trim_working_sets(pids)
         steps["working_sets"] = True
         if privileged:
-            steps["file_cache"] = ops.flush_file_cache()
-            steps["modified"] = ops.memory_list(FLUSH_MODIFIED)
-            steps["low_standby"] = ops.memory_list(PURGE_LOW_STANDBY)
+            steps["file_cache"] = self._attempt(ops.flush_file_cache)
+            steps["modified"] = self._attempt(lambda: ops.memory_list(FLUSH_MODIFIED))
+            steps["low_standby"] = self._attempt(lambda: ops.memory_list(PURGE_LOW_STANDBY))
             if ops.available_bytes() < LOW_MEMORY_FRACTION * ops.total_bytes():
-                steps["standby"] = ops.memory_list(PURGE_STANDBY)
+                steps["standby"] = self._attempt(lambda: ops.memory_list(PURGE_STANDBY))
         after = ops.available_bytes()
         return RamReport(trimmed, max(0, after - before), admin, steps)

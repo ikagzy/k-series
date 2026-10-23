@@ -15,7 +15,10 @@ def empty_working_set(pid: int) -> bool:
         k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
     except AttributeError:  # not Windows
         return False
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     k32.OpenProcess.restype = wintypes.HANDLE
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    psapi.EmptyWorkingSet.argtypes = [wintypes.HANDLE]
     handle = k32.OpenProcess(_QUERY_INFORMATION | _SET_QUOTA, False, pid)
     if not handle:
         return False

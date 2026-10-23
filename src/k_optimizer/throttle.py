@@ -34,10 +34,19 @@ class _PowerThrottling(ctypes.Structure):
 class WinOps:
     """Thin Win32 wrapper; every call fails soft (None / False)."""
 
-    def _open(self, pid: int):
-        k32 = ctypes.windll.kernel32
+    def __init__(self):
+        # Explicit argtypes: handles are 64-bit and ctypes defaults to 32-bit ints.
+        k32, gdi = ctypes.windll.kernel32, ctypes.windll.gdi32
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         k32.OpenProcess.restype = wintypes.HANDLE
-        return k32.OpenProcess(_QUERY | _SET_INFO, False, pid) or None
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        for fn in (k32.GetProcessInformation, k32.SetProcessInformation):
+            fn.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        gdi.D3DKMTGetProcessSchedulingPriorityClass.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_int)]
+        gdi.D3DKMTSetProcessSchedulingPriorityClass.argtypes = [wintypes.HANDLE, ctypes.c_int]
+
+    def _open(self, pid: int):
+        return ctypes.windll.kernel32.OpenProcess(_QUERY | _SET_INFO, False, pid) or None
 
     def _close(self, handle) -> None:
         ctypes.windll.kernel32.CloseHandle(handle)
@@ -106,6 +115,8 @@ class WinOps:
 def foreground_pid() -> int | None:
     try:
         user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
         return pid.value or None
