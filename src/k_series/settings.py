@@ -35,7 +35,8 @@ def launcher_path(path: Path | None = None) -> Path | None:
     return Path(value) if isinstance(value, str) and value else None
 
 
-DEFAULT_REPOS = {"k-launcher": "ikagzy/k-launcher", "k-series": "ikagzy/k-optimizer"}
+DEFAULT_REPOS = {"k-launcher": "ikagzy/k-launcher", "k-optimizer": "ikagzy/k-optimizer",
+                 "k-series": "ikagzy/k-optimizer"}
 # GitHub owner: letters, digits and single hyphens, never starting with one. Repo: letters, digits, _ . -
 # but never "." or ".." (which would turn the API URL into a path traversal).
 REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$")
@@ -51,3 +52,8 @@ def repo(product_id: str, path: Path | None = None) -> str:
     repos = load(path).get("repos")
     value = repos.get(product_id) if isinstance(repos, dict) else None
     return value if isinstance(value, str) and REPO_RE.match(value) else DEFAULT_REPOS[product_id]
+
+
+def optimizer_path(path: Path | None = None) -> Path | None:
+    value = load(path).get("optimizer_path")
+    return Path(value) if isinstance(value, str) and value else None

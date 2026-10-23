@@ -65,3 +65,15 @@ K-Series, K-Launcher ve K-Optimizer'ın güncellemelerini GitHub Releases'ten de
 - K-Series: çalışan exe yeniden adlandırılır (`.old`), yenisi yerine konur, başlatılır; `.old` sonraki açılışta silinir. Başarısızlıkta eski ad geri verilir.
 
 **Test:** Ağ, dosya sistemi ve süreç işlemleri sahte nesnelerle test edilir; gerçek indirme yapılmaz.
+
+## Güncelleme: K-Optimizer ayrı uygulama (2026-10-23)
+
+Kullanıcı isteğiyle K-Optimizer K-Series'in içinden çıkarıldı. K-Series artık yalnızca bir merkez: K-Optimizer ve
+K-Launcher iki ayrı ürün olarak algılanır (çalışan süreç, kayıtlı yol, K-Series'in yanındaki klasör,
+`%LOCALAPPDATA%\Programs`, masaüstü taraması; yüzeysel kopya derin olandan önce gelir), "Aç" ile ayrı pencerede
+açılır. Ürün kartlarında ve uygulama simgesinde K-Launcher'ın kendi hazır `ThemeIcons` simgeleri kullanılır (tema
+başına bir `.ico`); kendi çizdiğim rozetler kaldırıldı. Ayarlar, tema ve hareket K-Launcher'la ortaktır.
+
+Güncelleme akışları üçe çıktı: k-launcher, k-optimizer, k-series (her biri kendi `KLauncher*.exe`,
+`K-Optimizer*.exe`, `K-Series*.exe` dosyası ve deposu). Kurulu olmayan K-Optimizer için "Yükle" sunulur; "Kendiliğinden
+kur" yalnızca kurulu ürünleri günceller, ilk kurulumu hiçbir zaman kendiliğinden yapmaz.

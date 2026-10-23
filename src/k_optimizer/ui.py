@@ -10,14 +10,14 @@ from pathlib import Path
 
 import psutil
 
-from k_optimizer import classifier, cli, monitor, probalance, ramclean, theme, throttle, winutil
+from k_optimizer import classifier, cli, icons, monitor, probalance, ramclean, theme, throttle, winutil
+from k_optimizer.chrome import apply_window_theme, round_rect_points  # noqa: F401  (re-exported)
 from k_optimizer.cleaner import Cleaner
 from k_optimizer.models import Snapshot
 
 _INTERVAL_MS = 1500
 _FRAME_MS = 33
 _THEME_POLL_MS = 2000
-_ICON = Path(__file__).parent / "assets" / "klauncher.ico"
 
 _START, _SWEEP = 225, 270  # speedtest-style dial: bottom-left, clockwise over the top
 _W, _H = 940, 640
@@ -46,11 +46,6 @@ def summarize(snap: Snapshot) -> dict[str, tuple[float | None, str]]:
     return out
 
 
-def round_rect_points(x0, y0, x1, y1, r):
-    return [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1, x1 - r, y1,
-            x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
-
-
 class Gauge:
     """Animated dial state; drawing lives in App so every item shares one canvas."""
 
@@ -71,28 +66,6 @@ class Gauge:
             self.shown = self.target
         else:
             self.shown += (self.target - self.shown) * min(1.0, 0.25 / motion)
-
-
-def apply_window_theme(window: tk.Misc, pal: theme.Palette) -> None:
-    """Dark, palette-coloured title bar and rounded corners (Windows 11); fails soft elsewhere."""
-    window.configure(bg=pal.background)
-    try:
-        window.update_idletasks()
-        dwm = ctypes.windll.dwmapi
-        user32 = ctypes.windll.user32
-        user32.GetParent.restype = ctypes.c_void_p
-        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
-
-        def colorref(c: str) -> ctypes.c_uint:
-            r, g, b = theme._rgb(c)
-            return ctypes.c_uint(r | g << 8 | b << 16)
-
-        for attr, value in ((20, ctypes.c_int(1)), (33, ctypes.c_int(2)),
-                            (35, colorref(pal.background)), (34, colorref(pal.outline)),
-                            (36, colorref(theme.TEXT))):
-            dwm.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), attr, ctypes.byref(value), ctypes.sizeof(value))
-    except (AttributeError, OSError):
-        pass
 
 
 class OptimizerPanel(tk.Frame):
@@ -444,11 +417,8 @@ class App(tk.Tk):
         super().__init__()
         self.title("K-Optimizer")
         self.resizable(False, False)
-        try:
-            self.iconbitmap(str(_ICON))
-        except tk.TclError:
-            pass
         self.pal = theme.load()
+        icons.apply_window_icon(self, self.pal)  # K-Launcher's own theme icon
         self.motion = theme.motion_scale()
         self.panel = OptimizerPanel(self, lambda: self.pal, lambda: self.motion)
         self.panel.pack(fill="both", expand=True)
@@ -463,6 +433,7 @@ class App(tk.Tk):
         if pal != self.pal:
             self.pal = pal
             apply_window_theme(self, pal)
+            icons.apply_window_icon(self, pal)
         self.after(_THEME_POLL_MS, self._follow_theme)
 
     def _close(self):

@@ -1,7 +1,8 @@
 """K-Series: one hub window for the K apps, in the SteelSeries GG mould.
 
-Left sidebar, a home page of detected products, K-Optimizer built in as a page, K-Launcher detected and
-launched from here, and settings (theme, motion) shared with K-Launcher through its own settings folder.
+Left sidebar, a home page of detected products, K-Optimizer and K-Launcher as separate apps that K-Series
+detects and launches (and installs/updates from GitHub), and settings (theme, motion) shared with K-Launcher
+through its own settings folder.
 """
 import os
 import queue
@@ -13,20 +14,22 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 
-from k_optimizer import theme
-from k_optimizer.ui import OptimizerPanel, apply_window_theme, round_rect_points
-from k_series import __version__, products, settings, updater
+from k_optimizer import icons, klauncher, theme
+from k_optimizer.chrome import apply_window_theme, round_rect_points
+from k_series import __version__, products, settings, shortcuts, updater
 
 _W, _H = 1120, 720
 _SIDEBAR = 232
 _FRAME_MS = 33
 _THEME_POLL_MS = 2000
-_ICON = Path(__file__).resolve().parent.parent / "k_optimizer" / "assets" / "klauncher.ico"
 _ITCH = "https://itzkagzy.itch.io/k-launcher"
-_NAV = (("home", "Ana Sayfa"), ("optimizer", "K-Optimizer"), ("launcher", "K-Launcher"), ("settings", "Ayarlar"))
-_UPDATE_NAMES = {"k-launcher": "K-Launcher", "k-series": "K-Series (K-Optimizer dahil)"}
-_CARD_UPDATE = {"k-launcher": "k-launcher", "k-optimizer": "k-series"}  # card id -> update stream
+_NAV = (("home", "Ana Sayfa"), ("k-optimizer", "K-Optimizer"), ("k-launcher", "K-Launcher"), ("settings", "Ayarlar"))
+_PRODUCTS = ("k-optimizer", "k-launcher")
+_NAMES = {"k-launcher": "K-Launcher", "k-optimizer": "K-Optimizer", "k-series": "K-Series"}
+_EXE = {"k-launcher": klauncher.EXE_NAME, "k-optimizer": klauncher.OPTIMIZER_EXE}
+_SAVED_KEY = {"k-launcher": "launcher_path", "k-optimizer": "optimizer_path"}
 _MOTIONS = (("fast", "Hızlı"), ("normal", "Normal"), ("slow", "Yavaş"), ("off", "Kapalı"))
+_PAGE_ALIASES = {"optimizer": "k-optimizer", "launcher": "k-launcher"}
 
 
 class KSeriesApp(tk.Tk):
@@ -35,10 +38,6 @@ class KSeriesApp(tk.Tk):
         self.title("K-Series")
         self.resizable(False, False)
         self.geometry(f"{_W}x{_H}")
-        try:
-            self.iconbitmap(str(_ICON))
-        except tk.TclError:
-            pass
         families = set(tkfont.families())
         self._ui_font = next((f for f in theme.UI_FONTS if f in families), "Segoe UI")
         self._display_font = next((f for f in theme.DISPLAY_FONTS if f in families), "Segoe UI")
@@ -46,6 +45,7 @@ class KSeriesApp(tk.Tk):
         theme.set_launcher_hint(settings.launcher_path())
         self.pal = theme.load()
         self.motion = theme.motion_scale()
+        icons.apply_window_icon(self, self.pal)  # K-Launcher's own theme icon
 
         self.canvas = tk.Canvas(self, width=_W, height=_H, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
@@ -55,24 +55,22 @@ class KSeriesApp(tk.Tk):
         self._regions: list[tuple[tuple[str, str], tuple[float, float, float, float]]] = []
         self._hover: tuple[str, str] | None = None
 
-        self._page = os.environ.get("K_SERIES_PAGE", "home")
+        page = os.environ.get("K_SERIES_PAGE", "home")
+        self._page = _PAGE_ALIASES.get(page, page)
         self._products: list[products.Product] = []
         self._scanning = True
         self._scan_q: queue.SimpleQueue = queue.SimpleQueue()
         self._message = ""
         self._tick = 0
-        self._motion_now = theme.motion_scale()
         self._updates: dict[str, updater.Status] = {}
         self._upd_q: queue.SimpleQueue = queue.SimpleQueue()
         self._upd_done: queue.SimpleQueue = queue.SimpleQueue()
         self._update_busy = False
         self._check_pending = True
         self._auto_tried: set[str] = set()
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             updater.cleanup_old(Path(sys.executable))  # the copy we replaced during the last update
 
-        self.optimizer = OptimizerPanel(self, lambda: self.pal, lambda: self.motion, show_header=False,
-                                        width=_W - _SIDEBAR, height=_H, relaunch_args="-m k_series")
         apply_window_theme(self, self.pal)
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.bind("<<KSeriesQuit>>", lambda e: self._close())
@@ -88,23 +86,54 @@ class KSeriesApp(tk.Tk):
         pal = theme.load()
         self.motion = theme.motion_scale()
         if pal != self.pal:
-            self.pal = pal
-            apply_window_theme(self, pal)
+            self._theme_changed(pal)
         self.after(_THEME_POLL_MS, self._follow_theme)
+
+    def _theme_changed(self, pal):
+        """Recolour the window, the app icon and (if we made one) the desktop shortcut's icon."""
+        self.pal = pal
+        apply_window_theme(self, pal)
+        icons.apply_window_icon(self, pal)
+        self._refresh_shortcut()
+
+    @staticmethod
+    def _icons_dir() -> Path:
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "K-Series" / "ThemeIcons"
+
+    def _saved_shortcut(self) -> Path | None:
+        value = settings.load().get("shortcut")
+        return Path(value) if isinstance(value, str) and value else None
+
+    def _refresh_shortcut(self):
+        lnk = self._saved_shortcut()
+        if self._preview or lnk is None or not lnk.exists() or not getattr(sys, "frozen", False):
+            return
+        icon = icons.shortcut_icon(self._icons_dir(), self.pal)
+        threading.Thread(target=shortcuts.create, args=(lnk, Path(sys.executable), icon), daemon=True).start()
+
+    def _make_shortcut(self):
+        if not getattr(sys, "frozen", False):
+            self._message = "Kısayol yalnızca exe sürümünde oluşturulur."
+            return
+        lnk = shortcuts.desktop_dir() / "K-Series.lnk"
+        icon = icons.shortcut_icon(self._icons_dir(), self.pal)
+        ok = shortcuts.create(lnk, Path(sys.executable), icon)
+        if ok:
+            settings.save({**settings.load(), "shortcut": str(lnk)})
+        self._message = ("Masaüstü kısayolu hazır; simgesi temayla birlikte değişir." if ok
+                         else "Kısayol oluşturulamadı.")
 
     def _rescan(self):
         self._scanning = True
         theme.reset_launcher_cache()
-        saved = settings.launcher_path()
-        threading.Thread(target=lambda: self._scan_q.put(products.detect(saved=saved)), daemon=True).start()
+        saved, saved_opt = settings.launcher_path(), settings.optimizer_path()
+        extra = [Path(sys.executable).parent] if getattr(sys, "frozen", False) else []
+        threading.Thread(target=lambda: self._scan_q.put(
+            products.detect(saved=saved, saved_optimizer=saved_opt, extra_dirs=extra)), daemon=True).start()
 
     def _goto(self, page: str):
         self._page = page
         self._message = ""
-        if page == "optimizer":
-            self.optimizer.place(x=_SIDEBAR, y=0, width=_W - _SIDEBAR, height=_H)
-        else:
-            self.optimizer.place_forget()
 
     def _product(self, pid: str) -> products.Product | None:
         return next((p for p in self._products if p.id == pid), None)
@@ -114,6 +143,9 @@ class KSeriesApp(tk.Tk):
             try:
                 self._products = self._scan_q.get_nowait()
                 self._scanning = False
+                opt = self._product("k-optimizer")
+                if opt and opt.path:
+                    updater.cleanup_old(opt.path)  # the copy replaced during the last update
             except queue.Empty:
                 break
         if not self._scanning and self._check_pending and not self._preview:
@@ -122,8 +154,6 @@ class KSeriesApp(tk.Tk):
                 self._check_updates()
         self._drain_updates()
         self._tick += 1
-        if self._page == "optimizer" and not self.optimizer.winfo_ismapped():
-            self._goto("optimizer")
         self._draw()
         self.after(_FRAME_MS, self._frame)
 
@@ -131,13 +161,13 @@ class KSeriesApp(tk.Tk):
     def _local_version(self, upid: str) -> str | None:
         if upid == "k-series":
             return __version__
-        prod = self._product("k-launcher")
+        prod = self._product(upid)
         return prod.version if prod and prod.installed else None
 
     def _check_updates(self, announce: bool = False):
         if self._preview or self._update_busy:
             return
-        jobs = {upid: (settings.repo(upid), self._local_version(upid)) for upid in ("k-launcher", "k-series")}
+        jobs = {upid: (settings.repo(upid), self._local_version(upid)) for upid in _NAMES}
         if announce:
             self._message = "Güncellemeler denetleniyor…"
 
@@ -149,7 +179,7 @@ class KSeriesApp(tk.Tk):
     def _summary(self) -> str:
         parts = []
         for upid, st in self._updates.items():
-            name = _UPDATE_NAMES[upid].split(" ")[0]
+            name = _NAMES[upid]
             if st.state == "available":
                 parts.append(f"{name}: yeni sürüm {st.release.tag}")
             elif st.state == "current":
@@ -171,6 +201,9 @@ class KSeriesApp(tk.Tk):
                 self._message = self._summary()
             if settings.flag("auto_install", False) and not self._preview:
                 for upid, st in results.items():
+                    prod = self._product(upid)
+                    if upid in _PRODUCTS and (prod is None or not prod.installed):
+                        continue  # a first install is always a manual choice
                     if st.state == "available" and upid not in self._auto_tried:
                         self._auto_tried.add(upid)  # once per session, so a failing update cannot loop
                         self._start_update(upid, ask=False)
@@ -183,7 +216,7 @@ class KSeriesApp(tk.Tk):
             self._update_busy = False
             self._message = message
             if rescan:
-                self.after(15000, self._rescan)
+                self.after(rescan, self._rescan)
             if quit_app:
                 self.after(600, self._close)
 
@@ -191,20 +224,22 @@ class KSeriesApp(tk.Tk):
         st = self._updates.get(upid)
         if self._preview or self._update_busy or st is None or st.state != "available":
             return
-        rel, name = st.release, _UPDATE_NAMES[upid]
+        rel, name = st.release, _NAMES[upid]
         if upid == "k-series" and not getattr(sys, "frozen", False):
             self._message = "K-Series yalnızca exe sürümünde güncellenebilir."
             return
-        launcher = self._product("k-launcher")
-        running = upid == "k-launcher" and launcher is not None and launcher.running
+        prod = self._product(upid)
+        running = prod is not None and prod.running
         if running and not ask:
-            self._message = "K-Launcher açık olduğu için otomatik güncelleme beklemede; elle güncelleyebilirsin."
+            self._message = f"{name} açık olduğu için otomatik güncelleme beklemede; elle güncelleyebilirsin."
             return
         if ask:
-            local = self._local_version(upid) or "?"
+            fresh = upid in _PRODUCTS and (prod is None or not prod.installed)
+            local = "yüklü değil" if fresh else (self._local_version(upid) or "?")
             text = f"{name}\n{local}  →  {rel.tag}\n\n{rel.notes.strip()[:300]}\n\n"
-            text += ("K-Launcher şu an açık; güncelleme için nazikçe kapatılacak.\n\n" if running else "")
-            text += "İndirilsin ve kurulsun mu?"
+            if running:
+                text += f"{name} şu an açık; güncelleme için nazikçe kapatılacak.\n\n"
+            text += "İndirilsin ve yüklensin mi?" if fresh else "İndirilsin ve kurulsun mu?"
             if not messagebox.askyesno("Güncelleme", text):
                 return
         self._update_busy = True
@@ -221,14 +256,18 @@ class KSeriesApp(tk.Tk):
             self._message = f"{name} kuruluyor…"
             if upid == "k-launcher":
                 updater.install_launcher(path)
-                self._upd_done.put((f"K-Launcher {rel.tag} kuruluyor, birkaç saniye içinde yeniden açılır.", False, True))
+                self._upd_done.put((f"K-Launcher {rel.tag} kuruluyor, birkaç saniye içinde yeniden açılır.", False, 15000))
+            elif upid == "k-optimizer":
+                prod = self._product("k-optimizer")
+                updater.install_exe(path, prod.path if prod and prod.path else klauncher.optimizer_install_path())
+                self._upd_done.put((f"K-Optimizer {rel.tag} hazır.", False, 1000))
             else:
                 updater.install_self(path, Path(sys.executable))
-                self._upd_done.put((f"K-Series {rel.tag} kuruldu, yeniden başlatılıyor…", True, False))
+                self._upd_done.put((f"K-Series {rel.tag} kuruldu, yeniden başlatılıyor…", True, 0))
         except updater.UpdateError as e:
-            self._upd_done.put((str(e), False, False))
+            self._upd_done.put((str(e), False, 0))
         except Exception as e:  # never leave the UI stuck in "busy"
-            self._upd_done.put((f"Güncelleme beklenmedik bir hatayla durdu: {e}", False, False))
+            self._upd_done.put((f"Güncelleme beklenmedik bir hatayla durdu: {e}", False, 0))
 
     # --- drawing ------------------------------------------------------------------
     def _draw(self):
@@ -237,9 +276,12 @@ class KSeriesApp(tk.Tk):
         c.delete("all")
         self._regions = []
         self._draw_sidebar()
-        page = {"home": self._draw_home, "launcher": self._draw_launcher, "settings": self._draw_settings}
-        if self._page in page:  # the optimizer page is a panel laid over the content area
-            page[self._page]()
+        if self._page == "settings":
+            self._draw_settings()
+        elif self._page in _PRODUCTS:
+            self._draw_product(self._page)
+        else:
+            self._draw_home()
         if self._message:
             c.create_text(_SIDEBAR + 40, _H - 24, anchor="w", text=self._message, fill=p.primary,
                           font=self._font(10), width=_W - _SIDEBAR - 80)
@@ -271,7 +313,7 @@ class KSeriesApp(tk.Tk):
                       font=self._font(9))
 
     def _title(self, text: str, sub: str):
-        c, p = self.canvas, self.pal
+        c = self.canvas
         c.create_text(_SIDEBAR + 40, 48, anchor="w", text=text, fill=theme.TEXT, font=self._font(24, True, True))
         c.create_text(_SIDEBAR + 40, 82, anchor="w", text=sub, fill=theme.TEXT_MUTED, font=self._font(10))
 
@@ -280,12 +322,11 @@ class KSeriesApp(tk.Tk):
         self.canvas.create_polygon(round_rect_points(x0, y0, x1, y1, theme.RADIUS[3]), smooth=True,
                                    fill=p.card, outline=p.outline, width=1)
 
-    def _badge(self, x, y, size, text):
-        c, p = self.canvas, self.pal
-        c.create_polygon(round_rect_points(x, y, x + size, y + size, theme.RADIUS[2]), smooth=True,
-                         fill=theme.accent_soft(p), outline=p.primary, width=2)
-        c.create_text(x + size / 2, y + size / 2, text=text, fill=p.primary,
-                      font=self._font(round(size * 0.36), True, True))
+    def _logo(self, x, y, size):
+        """The theme's K logo (K-Launcher's own icon artwork) at the given size."""
+        img = icons.photo(self, self.pal, size)
+        if img is not None:
+            self.canvas.create_image(x, y, image=img, anchor="nw")
 
     def _button(self, key: tuple[str, str], x0, y0, x1, y1, text: str, primary: bool = True, enabled: bool = True):
         c, p = self.canvas, self.pal
@@ -305,9 +346,7 @@ class KSeriesApp(tk.Tk):
 
     def _status(self, x, y, product: products.Product) -> str:
         p = self.pal
-        if product.builtin:
-            label, color = "Yerleşik modül", p.primary
-        elif product.running:
+        if product.running:
             label, color = "Çalışıyor", p.primary
         elif product.installed:
             label, color = "Kurulu", p.secondary
@@ -316,6 +355,15 @@ class KSeriesApp(tk.Tk):
         self.canvas.create_oval(x, y - 4, x + 8, y + 4, fill=color, outline="")
         self.canvas.create_text(x + 16, y, anchor="w", text=label, fill=color, font=self._font(10, True))
         return label
+
+    def _update_state(self, upid: str):
+        st = self._updates.get(upid)
+        return st, st is not None and st.state == "available"
+
+    def _update_button(self, upid: str, prod: products.Product | None, bx, by, w=120):
+        label = "Yükle" if upid in _PRODUCTS and (prod is None or not prod.installed) else "Güncelle"
+        busy = self._update_busy
+        self._button(("update", upid), bx, by, bx + w, by + 40, label if not busy else "Bekle…", enabled=not busy)
 
     def _draw_home(self):
         c, p = self.canvas, self.pal
@@ -330,7 +378,7 @@ class KSeriesApp(tk.Tk):
         for i, prod in enumerate(self._products):
             x0, y0 = x + i * (card_w + gap), 120
             self._card(x0, y0, x0 + card_w, y0 + card_h)
-            self._badge(x0 + 24, y0 + 24, 64, "KO" if prod.id == "k-optimizer" else "KL")
+            self._logo(x0 + 24, y0 + 24, 64)
             c.create_text(x0 + 108, y0 + 40, anchor="w", text=prod.name, fill=theme.TEXT,
                           font=self._font(18, True, True))
             c.create_text(x0 + 108, y0 + 68, anchor="w", text=prod.tagline, fill=theme.TEXT_MUTED,
@@ -339,85 +387,105 @@ class KSeriesApp(tk.Tk):
             if prod.version:
                 c.create_text(x0 + card_w - 24, y0 + 116, anchor="e", text=f"v{prod.version}",
                               fill=theme.TEXT_MUTED, font=self._font(10))
-            upid = _CARD_UPDATE.get(prod.id)
-            st = self._updates.get(upid) if upid else None
-            has_update = st is not None and st.state == "available"
+            st, has_update = self._update_state(prod.id)
             if has_update:
-                c.create_text(x0 + 24, y0 + 146, anchor="w", text=f"↑ Yeni sürüm: {st.release.tag}",
+                label = "Yüklenebilir" if not prod.installed else "Yeni sürüm"
+                c.create_text(x0 + 24, y0 + 146, anchor="w", text=f"↑ {label}: {st.release.tag}",
                               fill=p.secondary, font=self._font(10, True))
             elif st is not None and st.state == "current":
                 c.create_text(x0 + 24, y0 + 146, anchor="w", text="Güncel", fill=theme.TEXT_FAINT,
                               font=self._font(9))
-            by = y0 + card_h - 56
-            bx = x0 + 24
-            if prod.builtin:
-                self._button(("goto", "optimizer"), bx, by, bx + 120, by + 40, "Aç")
-                bx += 130
+            by, bx = y0 + card_h - 56, x0 + 24
+            if prod.installed:
+                self._button(("open", prod.id), bx, by, bx + 120, by + 40, "Aç")
+            elif has_update:
+                self._update_button(prod.id, prod, bx, by)  # not installed yet: "Yükle" takes the main slot
+                has_update = False
             else:
-                self._button(("open", prod.id), bx, by, bx + 120, by + 40,
-                             "Aç" if prod.installed else "Bulunamadı", enabled=prod.installed)
-                self._button(("goto", "launcher"), bx + 130, by, bx + 130 + 100, by + 40, "Ayrıntı", primary=False)
-                bx += 240
+                self._button(("open", prod.id), bx, by, bx + 120, by + 40, "Bulunamadı", enabled=False)
+            bx += 130
+            self._button(("goto", prod.id), bx, by, bx + 100, by + 40, "Ayrıntı", primary=False)
+            bx += 110
             if has_update:
-                busy = self._update_busy
-                self._button(("update", upid), bx, by, bx + 120, by + 40, "Güncelle" if not busy else "Bekle…",
-                             enabled=not busy)
+                self._update_button(prod.id, prod, bx, by)
         self._button(("rescan", ""), x, 380, x + 150, 420, "Yeniden tara", primary=False)
-        c.create_text(x + 170, 400, anchor="w", text="Kurulu ürünleri yeniden algılar", fill=theme.TEXT_FAINT,
-                      font=self._font(9))
+        saved = self._saved_shortcut()
+        label = "Kısayol simgesini güncelle" if saved and saved.exists() else "Masaüstü kısayolu oluştur"
+        self._button(("shortcut", ""), x + 164, 380, x + 164 + 240, 420, label, primary=False)
+        c.create_text(x, 446, anchor="w", fill=theme.TEXT_FAINT, font=self._font(9),
+                      text="Kısayolun simgesi, K-Launcher'daki gibi seçtiğin temaya göre değişir.")
+        st, has_update = self._update_state("k-series")
+        if has_update:
+            by = 480
+            self._card(x, by, _W - 40, by + 72)
+            c.create_text(x + 24, by + 28, anchor="w", text=f"K-Series için yeni sürüm: {st.release.tag}",
+                          fill=theme.TEXT, font=self._font(12, True, True))
+            c.create_text(x + 24, by + 50, anchor="w", text=f"Şu an v{__version__}", fill=theme.TEXT_MUTED,
+                          font=self._font(9))
+            self._update_button("k-series", None, _W - 40 - 24 - 140, by + 16, w=140)
 
-    def _draw_launcher(self):
+    def _draw_product(self, pid: str):
         c, p = self.canvas, self.pal
-        self._title("K-Launcher", "Oyun ve uygulama başlatıcı")
-        prod = self._product("k-launcher")
+        name = _NAMES[pid]
+        prod = self._product(pid)
+        self._title(name, next((pr.tagline for pr in self._products if pr.id == pid), ""))
         if self._scanning or prod is None:
             c.create_text(_SIDEBAR + 40, 150, anchor="w", text="Aranıyor...", fill=theme.TEXT_MUTED,
                           font=self._font(12))
             return
-        x0, y0, x1, y1 = _SIDEBAR + 40, 120, _W - 40, 120 + 340
+        x0, y0, x1, y1 = _SIDEBAR + 40, 120, _W - 40, 120 + 360
         self._card(x0, y0, x1, y1)
-        self._badge(x0 + 28, y0 + 28, 80, "KL")
-        c.create_text(x0 + 130, y0 + 50, anchor="w", text=prod.name, fill=theme.TEXT, font=self._font(20, True, True))
-        self._status(x0 + 130, y0 + 84, prod)
+        self._logo(x0 + 28, y0 + 28, 128)
+        c.create_text(x0 + 186, y0 + 60, anchor="w", text=prod.name, fill=theme.TEXT, font=self._font(22, True, True))
+        self._status(x0 + 186, y0 + 98, prod)
+        st, has_update = self._update_state(pid)
+        if has_update:
+            c.create_text(x0 + 186, y0 + 126, anchor="w", text=f"↑ {st.release.tag} yayınlandı", fill=p.secondary,
+                          font=self._font(10, True))
         rows = [("Konum", str(prod.path) if prod.path else "Bulunamadı"),
                 ("Sürüm", prod.version or "-"),
-                ("Tema", f"{self.pal.name} (K-Series ile ortak)"),
-                ("Ayar klasörü", str(theme.data_dirs()[0]))]
+                ("Tema", f"{self.pal.name} (K-Series ile ortak)")]
+        if pid == "k-launcher":
+            rows.append(("Ayar klasörü", str(theme.data_dirs()[0])))
         for i, (k, v) in enumerate(rows):
-            ry = y0 + 142 + i * 30
+            ry = y0 + 186 + i * 30
             c.create_text(x0 + 28, ry, anchor="w", text=k, fill=theme.TEXT_MUTED, font=self._font(10))
-            c.create_text(x0 + 150, ry, anchor="w", text=v, fill=theme.TEXT, font=self._font(10),
-                          width=x1 - x0 - 180)
-        by = y1 - 68
-        self._button(("open", "k-launcher"), x0 + 28, by, x0 + 28 + 190, by + 40, "K-Launcher'ı aç",
+            c.create_text(x0 + 150, ry, anchor="w", text=v, fill=theme.TEXT, font=self._font(10), width=x1 - x0 - 180)
+        by, bx = y1 - 68, x0 + 28
+        self._button(("open", pid), bx, by, bx + 150, by + 40, f"{name}'ı aç" if prod.installed else "Bulunamadı",
                      enabled=prod.installed)
-        self._button(("folder", "k-launcher"), x0 + 28 + 202, by, x0 + 28 + 202 + 150, by + 40, "Klasörü aç",
-                     primary=False, enabled=prod.installed)
-        self._button(("pick", ""), x0 + 28 + 364, by, x0 + 28 + 364 + 150, by + 40, "Konum seç...", primary=False)
+        bx += 162
+        self._button(("folder", pid), bx, by, bx + 130, by + 40, "Klasörü aç", primary=False, enabled=prod.installed)
+        bx += 142
+        self._button(("pick", pid), bx, by, bx + 140, by + 40, "Konum seç...", primary=False)
+        bx += 152
         if not prod.installed:
-            self._button(("web", ""), x0 + 28 + 526, by, x0 + 28 + 526 + 180, by + 40, "itch.io sayfası", primary=False)
+            self._button(("web", pid), bx, by, bx + 150, by + 40, "İndirme sayfası", primary=False)
+            bx += 162
+        if has_update:
+            self._update_button(pid, prod, bx, by, w=130)
 
     def _draw_settings(self):
         c, p = self.canvas, self.pal
         self._title("Ayarlar", "Tema ve hareket, K-Launcher ile ortaktır")
         x = _SIDEBAR + 40
-        c.create_text(x, 128, anchor="w", text="TEMA", fill=theme.TEXT_MUTED, font=self._font(10, True, True))
-        cols, tw, th, gap = 4, 190, 92, 16
+        c.create_text(x, 124, anchor="w", text="TEMA", fill=theme.TEXT_MUTED, font=self._font(10, True, True))
+        cols, tw, th, gap = 4, 190, 80, 16
         for i, pal in enumerate(theme.PALETTES.values()):
             x0 = x + (i % cols) * (tw + gap)
-            y0 = 148 + (i // cols) * (th + gap)
+            y0 = 142 + (i // cols) * (th + 12)
             selected = pal.id == self.pal.id
             hover = self._hover == ("theme", pal.id)
             c.create_polygon(round_rect_points(x0, y0, x0 + tw, y0 + th, theme.RADIUS[2]), smooth=True,
                              fill=pal.card, outline=pal.primary if selected else (pal.secondary if hover else pal.outline),
                              width=2 if selected else 1)
             for j, col in enumerate((pal.primary, pal.secondary)):
-                c.create_oval(x0 + 18 + j * 26, y0 + 18, x0 + 38 + j * 26, y0 + 38, fill=col, outline="")
-            c.create_text(x0 + 18, y0 + 62, anchor="w", text=pal.name, fill=theme.TEXT, font=self._font(11, True, True))
+                c.create_oval(x0 + 18 + j * 26, y0 + 14, x0 + 38 + j * 26, y0 + 34, fill=col, outline="")
+            c.create_text(x0 + 18, y0 + 56, anchor="w", text=pal.name, fill=theme.TEXT, font=self._font(11, True, True))
             if selected:
                 c.create_text(x0 + tw - 16, y0 + 24, anchor="e", text="✓", fill=pal.primary, font=self._font(14, True))
             self._region(("theme", pal.id), (x0, y0, x0 + tw, y0 + th))
-        my = 148 + 2 * (th + gap) + 20
+        my = 142 + 2 * (th + 12) + 14
         c.create_text(x, my, anchor="w", text="HAREKET HIZI", fill=theme.TEXT_MUTED, font=self._font(10, True, True))
         current = next((w for w, m in (("fast", 0.55), ("normal", 1.0), ("slow", 1.6), ("off", 0.0))
                         if abs(m - self.motion) < 1e-6), "normal")
@@ -425,16 +493,16 @@ class KSeriesApp(tk.Tk):
             x0 = x + i * 130
             sel = word == current
             hover = self._hover == ("motion", word)
-            c.create_polygon(round_rect_points(x0, my + 22, x0 + 116, my + 62, theme.RADIUS[1]), smooth=True,
+            c.create_polygon(round_rect_points(x0, my + 18, x0 + 116, my + 54, theme.RADIUS[1]), smooth=True,
                              fill=theme.accent_soft(p) if sel else (p.control if hover else p.card),
                              outline=p.primary if sel else p.outline, width=2 if sel else 1)
-            c.create_text(x0 + 58, my + 42, text=label, fill=p.primary if sel else theme.TEXT,
+            c.create_text(x0 + 58, my + 36, text=label, fill=p.primary if sel else theme.TEXT,
                           font=self._font(11, True, True))
-            self._region(("motion", word), (x0, my + 22, x0 + 116, my + 62))
-        c.create_text(x, my + 96, anchor="w", width=_W - _SIDEBAR - 80, fill=theme.TEXT_FAINT, font=self._font(9),
+            self._region(("motion", word), (x0, my + 18, x0 + 116, my + 54))
+        c.create_text(x, my + 76, anchor="w", width=_W - _SIDEBAR - 80, fill=theme.TEXT_FAINT, font=self._font(9),
                       text=f"Seçim {theme.data_dirs()[0]} klasörüne yazılır. K-Launcher bir sonraki açılışında bu "
-                           "temayı kullanır; K-Series ve K-Optimizer hemen değişir.")
-        uy = my + 150
+                           "temayı kullanır; K-Series hemen değişir.")
+        uy = my + 118
         c.create_text(x, uy, anchor="w", text="GÜNCELLEMELER (GITHUB)", fill=theme.TEXT_MUTED,
                       font=self._font(10, True, True))
         for i, (key, label, default) in enumerate((("auto_check", "Açılışta denetle", True),
@@ -442,18 +510,17 @@ class KSeriesApp(tk.Tk):
             x0 = x + i * 246
             on = settings.flag(key, default)
             hover = self._hover == ("flag", key)
-            c.create_polygon(round_rect_points(x0, uy + 18, x0 + 232, uy + 58, theme.RADIUS[1]), smooth=True,
+            c.create_polygon(round_rect_points(x0, uy + 16, x0 + 232, uy + 52, theme.RADIUS[1]), smooth=True,
                              fill=theme.accent_soft(p) if on else (p.control if hover else p.card),
                              outline=p.primary if on else p.outline, width=2 if on else 1)
-            c.create_text(x0 + 116, uy + 38, text=("✓  " if on else "") + label,
+            c.create_text(x0 + 116, uy + 34, text=("✓  " if on else "") + label,
                           fill=p.primary if on else theme.TEXT, font=self._font(11, True, True))
-            self._region(("flag", key), (x0, uy + 18, x0 + 232, uy + 58))
-        self._button(("checknow", ""), x + 500, uy + 18, x + 500 + 150, uy + 58, "Şimdi denetle", primary=False,
+            self._region(("flag", key), (x0, uy + 16, x0 + 232, uy + 52))
+        self._button(("checknow", ""), x + 500, uy + 16, x + 500 + 150, uy + 52, "Şimdi denetle", primary=False,
                      enabled=not self._update_busy)
-        for i, upid in enumerate(("k-launcher", "k-series")):
-            ry = uy + 86 + i * 30
-            c.create_text(x, ry, anchor="w", fill=theme.TEXT_MUTED, font=self._font(10),
-                          text=f"{_UPDATE_NAMES[upid].split(' ')[0]} deposu:")
+        for i, upid in enumerate(("k-launcher", "k-optimizer", "k-series")):
+            ry = uy + 76 + i * 30
+            c.create_text(x, ry, anchor="w", fill=theme.TEXT_MUTED, font=self._font(10), text=f"{_NAMES[upid]} deposu:")
             c.create_text(x + 200, ry, anchor="w", fill=theme.TEXT, font=self._font(10), text=settings.repo(upid))
             self._button(("repo", upid), x + 400, ry - 13, x + 400 + 100, ry + 13, "Değiştir", primary=False)
 
@@ -490,14 +557,15 @@ class KSeriesApp(tk.Tk):
         elif kind == "rescan":
             self._message = ""
             self._rescan()
+        elif kind == "shortcut":
+            self._make_shortcut()
         elif kind == "pick":
-            self._pick_launcher()
+            self._pick_exe(arg)
         elif kind == "web":
-            webbrowser.open(_ITCH)
+            webbrowser.open(_ITCH if arg == "k-launcher" else f"https://github.com/{settings.repo(arg)}/releases")
         elif kind == "theme":
             ok = theme.save(arg)
-            self.pal = theme.load()
-            apply_window_theme(self, self.pal)
+            self._theme_changed(theme.load())
             self._message = "" if ok else "Tema ayar klasörüne yazılamadı (salt okunur olabilir)."
         elif kind == "motion":
             ok = theme.save_motion(arg)
@@ -515,7 +583,7 @@ class KSeriesApp(tk.Tk):
             self._change_repo(arg)
 
     def _change_repo(self, upid: str):
-        value = simpledialog.askstring("GitHub deposu", f"{_UPDATE_NAMES[upid]} güncellemeleri hangi depodan gelsin?\n"
+        value = simpledialog.askstring("GitHub deposu", f"{_NAMES[upid]} güncellemeleri hangi depodan gelsin?\n"
                                        "(sahip/depo biçiminde, ör. ikagzy/k-launcher)", initialvalue=settings.repo(upid),
                                        parent=self)
         if value is None:
@@ -530,18 +598,18 @@ class KSeriesApp(tk.Tk):
         self._message = f"Depo kaydedildi: {value}" if ok else "Depo kaydedilemedi."
         self._check_updates(announce=True)
 
-    def _pick_launcher(self):
-        path = filedialog.askopenfilename(title="KLauncher.exe seç", filetypes=[("K-Launcher", "KLauncher.exe"),
-                                                                                  ("Uygulama", "*.exe")])
+    def _pick_exe(self, pid: str):
+        exe = _EXE[pid]
+        path = filedialog.askopenfilename(title=f"{exe} seç", filetypes=[(_NAMES[pid], exe), ("Uygulama", "*.exe")])
         if not path:
             return
-        ok = settings.save({**settings.load(), "launcher_path": path})
-        theme.set_launcher_hint(Path(path))
+        ok = settings.save({**settings.load(), _SAVED_KEY[pid]: path})
+        if pid == "k-launcher":
+            theme.set_launcher_hint(Path(path))
         self._message = "Konum kaydedildi." if ok else "Konum kaydedilemedi."
         self._rescan()
 
     def _close(self):
-        self.optimizer.shutdown()
         self.destroy()
 
 

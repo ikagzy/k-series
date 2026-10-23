@@ -113,3 +113,58 @@ def test_saving_an_unknown_theme_or_motion_is_refused(tmp_path, monkeypatch):
     theme.reset_launcher_cache()
     assert theme.save("not-a-theme") is False
     assert theme.save_motion("warp") is False
+
+
+# --- K-Optimizer detection (a separate app, found the same way as K-Launcher) -------------------------
+def make_opt(folder: Path) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    exe = folder / "K-Optimizer.exe"
+    exe.write_bytes(b"MZ")
+    return exe
+
+
+def test_optimizer_running_copy_wins(tmp_path, monkeypatch):
+    env(monkeypatch, tmp_path)
+    running = make_opt(tmp_path / "somewhere")
+    installed = make_opt(tmp_path / "local" / "Programs" / "K-Optimizer")
+    got = klauncher.find_optimizer(saved=installed, running=lambda: [running], scan_roots=[])
+    assert got == running
+
+
+def test_optimizer_found_next_to_k_series_then_in_install_folders_then_by_scan(tmp_path, monkeypatch):
+    env(monkeypatch, tmp_path)
+    sibling = make_opt(tmp_path / "hub")
+    installed = make_opt(tmp_path / "local" / "Programs" / "K-Optimizer")
+    assert klauncher.find_optimizer(running=lambda: [], scan_roots=[], extra_dirs=[sibling.parent]) == sibling
+    assert klauncher.find_optimizer(running=lambda: [], scan_roots=[]) == installed
+    installed.unlink()
+    dev = make_opt(tmp_path / "dev" / "dist")
+    assert klauncher.find_optimizer(running=lambda: [], scan_roots=[tmp_path / "dev"]) == dev
+
+
+def test_optimizer_saved_path_and_absence(tmp_path, monkeypatch):
+    env(monkeypatch, tmp_path)
+    saved = make_opt(tmp_path / "mine")
+    assert klauncher.find_optimizer(saved=saved, running=lambda: [], scan_roots=[]) == saved
+    assert klauncher.find_optimizer(saved=tmp_path / "gone.exe", running=lambda: [], scan_roots=[]) is None
+
+
+def test_optimizer_scan_does_not_mistake_the_launcher_exe_for_it(tmp_path, monkeypatch):
+    env(monkeypatch, tmp_path)
+    make_exe(tmp_path / "dev")  # KLauncher.exe
+    assert klauncher.find_optimizer(running=lambda: [], scan_roots=[tmp_path / "dev"]) is None
+
+
+def test_default_optimizer_install_path_is_under_local_programs(tmp_path, monkeypatch):
+    env(monkeypatch, tmp_path)
+    assert klauncher.optimizer_install_path() == tmp_path / "local" / "Programs" / "K-Optimizer" / "K-Optimizer.exe"
+
+
+def test_scan_prefers_the_shallower_copy_over_a_newer_one_buried_in_a_build_folder(tmp_path, monkeypatch):
+    env(monkeypatch, tmp_path)
+    shallow = make_opt(tmp_path / "desk")
+    deep = make_opt(tmp_path / "desk" / "project" / "dist")
+    import os
+    os.utime(shallow, (1, 1))  # much older, still wins
+    assert klauncher.find_optimizer(running=lambda: [], scan_roots=[tmp_path / "desk"]) == shallow
+    assert klauncher.scan_for_exe([tmp_path / "desk"], name="K-Optimizer.exe") == [shallow, deep]

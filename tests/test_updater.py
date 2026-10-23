@@ -290,6 +290,65 @@ def test_check_reports_available_current_none_and_error():
     assert bad.state == "error" and "ulaşılamadı" in bad.message
 
 
-def test_default_repos_and_asset_patterns_cover_both_products():
+def test_default_repos_and_asset_patterns_cover_every_product():
     assert updater.DEFAULT_REPOS["k-launcher"] == "ikagzy/k-launcher"
-    assert set(updater.DEFAULT_REPOS) == set(updater.ASSET_PATTERNS) == {"k-launcher", "k-series"}
+    assert set(updater.DEFAULT_REPOS) == set(updater.ASSET_PATTERNS) == {"k-launcher", "k-optimizer", "k-series"}
+
+
+def test_each_stream_only_matches_its_own_asset():
+    import re
+
+    names = {"k-launcher": "KLauncher.exe", "k-optimizer": "K-Optimizer.exe", "k-series": "K-Series.exe"}
+    for pid, pattern in updater.ASSET_PATTERNS.items():
+        for other, name in names.items():
+            assert bool(re.match(pattern, name, re.IGNORECASE)) == (pid == other), (pid, name)
+        assert re.match(pattern, names[pid] + ".sha256", re.IGNORECASE) is None  # checksum files are never installed
+
+
+# --- installing K-Optimizer (a separate exe, replaced in place) ------------------------------------
+def test_install_exe_replaces_in_place_keeping_the_old_copy_and_relaunches_if_it_was_running(tmp_path):
+    target, new = tmp_path / "app" / "K-Optimizer.exe", tmp_path / "dl" / "K-Optimizer.exe"
+    target.parent.mkdir()
+    new.parent.mkdir()
+    target.write_bytes(b"old")
+    new.write_bytes(b"new")
+    state, log = {"pids": [5]}, []
+
+    def close(pids):
+        log.append(("close", list(pids)))
+        state["pids"] = []
+
+    updater.install_exe(new, target, running_pids=lambda: state["pids"], request_close=close,
+                        run=lambda *a, **k: log.append(("run", a[0])), sleep=lambda s: None)
+    assert target.read_bytes() == b"new" and (target.parent / "K-Optimizer.exe.old").read_bytes() == b"old"
+    assert log == [("close", [5]), ("run", [str(target)])]
+
+
+def test_install_exe_does_not_start_it_when_it_was_not_running_and_creates_folders(tmp_path):
+    target, new = tmp_path / "Programs" / "K-Optimizer" / "K-Optimizer.exe", tmp_path / "K-Optimizer.exe"
+    new.write_bytes(b"new")
+    ran = []
+    updater.install_exe(new, target, running_pids=lambda: [], request_close=lambda p: 1 / 0,
+                        run=lambda *a, **k: ran.append(1), sleep=lambda s: None)
+    assert target.read_bytes() == b"new" and ran == []
+
+
+def test_install_exe_never_force_kills_and_leaves_everything_untouched_if_it_will_not_close(tmp_path):
+    target, new = tmp_path / "K-Optimizer.exe", tmp_path / "new.exe"
+    target.write_bytes(b"old")
+    new.write_bytes(b"new")
+    with pytest.raises(updater.UpdateError, match="kapat"):
+        updater.install_exe(new, target, running_pids=lambda: [7], request_close=lambda p: None,
+                            run=lambda *a, **k: 1 / 0, sleep=lambda s: None, wait_s=0.2)
+    assert target.read_bytes() == b"old" and new.read_bytes() == b"new"
+
+
+def test_install_exe_rolls_back_when_the_move_fails(tmp_path, monkeypatch):
+    target, new = tmp_path / "K-Optimizer.exe", tmp_path / "new.exe"
+    target.write_bytes(b"old")
+    new.write_bytes(b"new")
+    monkeypatch.setattr(updater.shutil, "move", lambda a, b: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(updater.UpdateError):
+        updater.install_exe(new, target, running_pids=lambda: [], request_close=lambda p: None,
+                            run=lambda *a, **k: 1 / 0, sleep=lambda s: None)
+    assert target.read_bytes() == b"old"

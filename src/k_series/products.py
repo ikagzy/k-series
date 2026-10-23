@@ -1,10 +1,11 @@
-"""Product detection, the way SteelSeries GG detects devices: find what is installed, report its state."""
+"""Product detection, the way SteelSeries GG detects devices: find what is installed, report its state.
+
+Both K apps are separate programs: K-Series finds them, shows their state and launches them."""
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import k_optimizer
 from k_optimizer import klauncher
 
 
@@ -14,26 +15,31 @@ class Product:
     name: str
     tagline: str
     installed: bool
-    builtin: bool
     path: Path | None
     version: str | None
     running: bool
 
 
-def detect(saved: Path | None = None, scan_roots: list[Path] | None = None) -> list[Product]:
-    optimizer = Product("k-optimizer", "K-Optimizer", "RAM, GPU ve CPU temizleyici",
-                        installed=True, builtin=True, path=None, version=k_optimizer.__version__, running=True)
-    exe = klauncher.find_exe(saved=saved, scan_roots=scan_roots)
-    launcher = Product("k-launcher", "K-Launcher", "Oyun ve uygulama başlatıcı",
-                       installed=exe is not None, builtin=False, path=exe,
-                       version=klauncher.file_version(exe) if exe else None,
-                       running=klauncher.is_running(exe))
-    return [optimizer, launcher]
+def _product(pid: str, name: str, tagline: str, exe: Path | None, running: bool) -> Product:
+    return Product(pid, name, tagline, exe is not None, exe,
+                   klauncher.file_version(exe) if exe else None, running)
+
+
+def detect(saved: Path | None = None, scan_roots: list[Path] | None = None,
+           saved_optimizer: Path | None = None, extra_dirs: list[Path] | tuple = ()) -> list[Product]:
+    """K-Optimizer and K-Launcher, each found (or not) on this computer. `saved` is the K-Launcher path."""
+    opt = klauncher.find_optimizer(saved=saved_optimizer, scan_roots=scan_roots, extra_dirs=extra_dirs)
+    launcher = klauncher.find_exe(saved=saved, scan_roots=scan_roots)
+    return [
+        _product("k-optimizer", "K-Optimizer", "RAM, GPU ve CPU temizleyici", opt,
+                 bool(opt) and any(p.samefile(opt) for p in klauncher.running_optimizer_exes() if p.exists())),
+        _product("k-launcher", "K-Launcher", "Oyun ve uygulama başlatıcı", launcher, klauncher.is_running(launcher)),
+    ]
 
 
 def launch(product: Product, popen: Callable = subprocess.Popen) -> bool:
-    """Start an installed external product in its own folder. Built-in or missing products are refused."""
-    if product.builtin or product.path is None or not product.path.is_file():
+    """Start an installed product in its own folder. A missing product is refused; failures never raise."""
+    if product.path is None or not product.path.is_file():
         return False
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     try:

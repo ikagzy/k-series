@@ -22,7 +22,8 @@ from k_optimizer import klauncher
 
 from k_series.settings import DEFAULT_REPOS, REPO_RE  # noqa: E402  (re-exported)
 
-ASSET_PATTERNS = {"k-launcher": r"^KLauncher.*\.exe$", "k-series": r"^K-Series.*\.exe$"}
+ASSET_PATTERNS = {"k-launcher": r"^KLauncher.*\.exe$", "k-optimizer": r"^K-Optimizer.*\.exe$",
+                  "k-series": r"^K-Series.*\.exe$"}
 
 _REPO_RE = REPO_RE
 _SHA_RE = re.compile(r"\b[0-9a-fA-F]{64}\b")
@@ -208,6 +209,48 @@ def install_launcher(new_exe: Path, running_pids=None, request_close=_polite_clo
         run([str(new_exe)], cwd=str(new_exe.parent))
     except OSError as e:
         raise UpdateError("Yeni K-Launcher başlatılamadı.") from e
+
+
+def install_exe(new_exe: Path, target: Path, running_pids=None, request_close=_polite_close,
+                run=_spawn, sleep=time.sleep, wait_s: float = 12.0) -> None:
+    """Install or update a standalone exe (K-Optimizer) at `target`.
+
+    A running copy is asked to close politely (never force-killed); the old file is kept as `.old`, the new one
+    moved into place, and the app is started again only if it was running. Failures leave the old copy working."""
+    running_pids = running_pids or klauncher.running_optimizer_pids  # looked up at call time (tests replace it)
+    pids = running_pids()
+    was_running = bool(pids)
+    if pids:
+        request_close(pids)
+        waited = 0.0
+        while running_pids() and waited < wait_s:
+            sleep(0.25)
+            waited += 0.25
+        if running_pids():
+            raise UpdateError("K-Optimizer kapanmadı. İşini kaydedip kapat, sonra güncellemeyi yeniden dene.")
+    old = target.with_name(target.name + ".old")
+    had_old_target = target.exists()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if had_old_target:
+            old.unlink(missing_ok=True)
+            os.replace(target, old)
+    except OSError as e:
+        raise UpdateError("Mevcut K-Optimizer dosyası değiştirilemedi.") from e
+    try:
+        shutil.move(str(new_exe), str(target))
+    except OSError as e:
+        if had_old_target:
+            try:
+                os.replace(old, target)  # put the working copy back
+            except OSError:
+                pass
+        raise UpdateError("Yeni sürüm yerine konamadı; eski sürüm korundu.") from e
+    if was_running:
+        try:
+            run([str(target)], cwd=str(target.parent))
+        except OSError as e:
+            raise UpdateError("K-Optimizer güncellendi ama yeniden başlatılamadı; elle aç.") from e
 
 
 def install_self(new_exe: Path, current_exe: Path, run=_spawn) -> None:

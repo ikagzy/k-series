@@ -43,11 +43,14 @@ jobs:
       - name: Build executables
         shell: pwsh
         run: |
-          $common = @("--noconfirm", "--onefile", "--noconsole", "--icon", "src/k_optimizer/assets/klauncher.ico",
-                      "--paths", "src", "--add-data", "src/k_optimizer/assets;k_optimizer/assets",
+          $common = @("--noconfirm", "--onefile", "--noconsole", "--paths", "src", "--icon", "src/k_optimizer/assets/klauncher.ico",
+                      "--add-data", "src/k_optimizer/assets;k_optimizer/assets",
                       "--add-data", "src/k_optimizer/data;k_optimizer/data")
-          python -m PyInstaller @common --name K-Series kseries_launcher.py
-          python -m PyInstaller @common --name K-Optimizer launcher.py
+          # embed the version in each exe: K-Series reads it to tell which K-Optimizer is installed
+          python tools/make_version.py k_series "K-Series" "K-Series.exe" build/version_kseries.txt
+          python tools/make_version.py k_optimizer "K-Optimizer" "K-Optimizer.exe" build/version_koptimizer.txt
+          python -m PyInstaller @common --version-file build/version_kseries.txt --name K-Series kseries_launcher.py
+          python -m PyInstaller @common --version-file build/version_koptimizer.txt --name K-Optimizer launcher.py
           foreach ($exe in "K-Series", "K-Optimizer") {
             $hash = (Get-FileHash "dist/$exe.exe" -Algorithm SHA256).Hash.ToLower()
             "$hash  $exe.exe" | Set-Content "dist/$exe.exe.sha256" -Encoding ascii

@@ -12,6 +12,7 @@ from pathlib import Path
 import psutil
 
 EXE_NAME = "KLauncher.exe"
+OPTIMIZER_EXE = "K-Optimizer.exe"
 _SKIP_DIRS = {"obj", "bin", ".git", "node_modules", "__pycache__", "assets", "data"}
 
 
@@ -19,17 +20,25 @@ def _env(name: str, default: str) -> Path:
     return Path(os.environ.get(name) or default)
 
 
-def running_exes() -> list[Path]:
+def _running_named(name: str) -> list[Path]:
     out: list[Path] = []
     for p in psutil.process_iter(["name", "exe"]):
         try:
-            if (p.info["name"] or "").lower() == EXE_NAME.lower() and p.info["exe"]:
+            if (p.info["name"] or "").lower() == name.lower() and p.info["exe"]:
                 exe = Path(p.info["exe"])
                 if exe not in out:
                     out.append(exe)
         except psutil.Error:
             continue
     return out
+
+
+def running_exes() -> list[Path]:
+    return _running_named(EXE_NAME)
+
+
+def running_optimizer_exes() -> list[Path]:
+    return _running_named(OPTIMIZER_EXE)
 
 
 def install_candidates() -> list[Path]:
@@ -42,27 +51,28 @@ def install_candidates() -> list[Path]:
     ]
 
 
-def scan_for_exe(roots: list[Path], depth: int = 4) -> list[Path]:
-    """Shallow search for copies that are not installed (portable/dev folders), newest first."""
-    found: list[Path] = []
+def scan_for_exe(roots: list[Path], depth: int = 4, name: str = EXE_NAME) -> list[Path]:
+    """Shallow search for copies that are not installed (portable/dev folders). Nearest to the root first
+    (the copy sitting on the desktop beats one buried in a build folder), newest first among equals."""
+    found: list[tuple[int, Path]] = []
 
-    def walk(folder: Path, left: int):
+    def walk(folder: Path, level: int):
         try:
             entries = list(os.scandir(folder))
         except OSError:
             return
         for e in entries:
             try:
-                if e.is_file() and e.name.lower() == EXE_NAME.lower():
-                    found.append(Path(e.path))
-                elif left > 0 and e.is_dir(follow_symlinks=False) and e.name.lower() not in _SKIP_DIRS:
-                    walk(Path(e.path), left - 1)
+                if e.is_file() and e.name.lower() == name.lower():
+                    found.append((level, Path(e.path)))
+                elif level < depth and e.is_dir(follow_symlinks=False) and e.name.lower() not in _SKIP_DIRS:
+                    walk(Path(e.path), level + 1)
             except OSError:
                 continue
 
     for root in roots:
-        walk(root, depth)
-    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+        walk(root, 0)
+    return [p for _, p in sorted(found, key=lambda t: (t[0], -t[1].stat().st_mtime))]
 
 
 def default_scan_roots() -> list[Path]:
@@ -129,12 +139,49 @@ def file_version(exe: Path) -> str | None:
         return None
 
 
-def running_pids() -> list[int]:
+def _pids_named(name: str) -> list[int]:
     out: list[int] = []
     for p in psutil.process_iter(["name", "pid"]):
         try:
-            if (p.info["name"] or "").lower() == EXE_NAME.lower():
+            if (p.info["name"] or "").lower() == name.lower():
                 out.append(p.info["pid"])
         except psutil.Error:
             continue
     return out
+
+
+def running_pids() -> list[int]:
+    return _pids_named(EXE_NAME)
+
+
+def running_optimizer_pids() -> list[int]:
+    return _pids_named(OPTIMIZER_EXE)
+
+
+def optimizer_install_path() -> Path:
+    """Where K-Series installs K-Optimizer when it is not found anywhere."""
+    return _env("LOCALAPPDATA", str(Path.home())) / "Programs" / "K-Optimizer" / OPTIMIZER_EXE
+
+
+def find_optimizer(
+    saved: Path | None = None,
+    running: Callable[[], list[Path]] | None = None,
+    scan_roots: list[Path] | None = None,
+    extra_dirs: list[Path] | tuple = (),
+) -> Path | None:
+    """K-Optimizer is its own app: running copy, saved path, next to K-Series, install folders, shallow scan."""
+    live = (running or running_optimizer_exes)()
+    if live:
+        return live[0]
+    if saved is not None and saved.is_file():
+        return saved
+    candidates = [Path(d) / OPTIMIZER_EXE for d in extra_dirs] + [
+        optimizer_install_path(),
+        _env("ProgramFiles", "C:/Program Files") / "K-Optimizer" / OPTIMIZER_EXE,
+        _env("ProgramFiles(x86)", "C:/Program Files (x86)") / "K-Optimizer" / OPTIMIZER_EXE,
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    scanned = scan_for_exe(default_scan_roots() if scan_roots is None else scan_roots, name=OPTIMIZER_EXE)
+    return scanned[0] if scanned else None
