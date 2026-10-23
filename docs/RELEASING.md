@@ -11,7 +11,7 @@ GitHub'a koyup bir sürüm etiketi atınca GitHub Actions exe'yi senin yerine de
 2. Bu klasör zaten bir git deposu. Uzak depoyu bağla ve it:
    ```
    git remote add origin https://github.com/ikagzy/k-series.git
-   git push -u origin master
+   git push -u origin main
    ```
    `.github/workflows/release.yml` iş akışı depoyla birlikte gider.
 
