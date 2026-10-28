@@ -100,6 +100,7 @@ _PAIRS = {
     " · tam temizlik için yönetici olarak aç": " · open as administrator for a full clean",
     # product taglines
     "RAM, GPU ve CPU temizleyici": "RAM, GPU and CPU cleaner", "Oyun ve uygulama başlatıcı": "Game and app launcher",
+    "Yerel yapay zekayla kendi oyununu yap": "Make your own game with local AI",
     # update errors (updater.py)
     " (sahip/depo biçiminde olmalı)": " (must be owner/repo)", "Geçersiz GitHub deposu: ": "Invalid GitHub repository: ",
     "GitHub istek sınırına takıldı, biraz sonra yeniden dene.": "GitHub's rate limit was hit; try again in a moment.",

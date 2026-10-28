@@ -54,7 +54,7 @@ def test_both_apps_are_separate_products_with_an_open_button_each(ks):
     ks._goto("home")
     ks._draw()
     ids = {p.id: p for p in ks._products}
-    assert set(ids) == {"k-optimizer", "k-launcher"}
+    assert set(ids) == {"k-optimizer", "k-launcher", "k-minigames"}
     assert not hasattr(ks, "optimizer")  # nothing of K-Optimizer is embedded in the hub any more
     ks._products = [launcher_product(), optimizer_product()]
     ks._draw()
@@ -510,3 +510,58 @@ def test_a_finished_update_is_no_longer_offered(ks, monkeypatch):
     ks._upd_done.put(("K-Optimizer v1.0.1 hazır.", False, 10))
     assert pump(ks, lambda: ("k-optimizer", "1.0.1.0") in checked)  # asked again, with the new installed version
     assert pump(ks, lambda: ks._updates.get("k-optimizer") and ks._updates["k-optimizer"].state == "current")
+
+
+# --- K-MiniGames card ---------------------------------------------------------------------------------
+
+def minigames_product(installed=True, running=False):
+    return kproducts.Product("k-minigames", "K-MiniGames", "Yerel yapay zekayla kendi oyununu yap", installed,
+                             Path("C:/x/K-MiniGames.exe") if installed else None, "0.1.0.0" if installed else None,
+                             running)
+
+
+def region_keys(a):
+    return [k for k, _ in a._regions]
+
+
+def test_home_shows_a_k_minigames_card_whose_open_button_launches_it(ks, monkeypatch):
+    scan_done(ks)
+    ks._goto("home")
+    ks._products = [optimizer_product(), launcher_product(), minigames_product()]
+    launched = []
+    monkeypatch.setattr(kproducts, "launch", lambda prod, **k: launched.append(prod.id) or True)
+    ks._draw()
+    x0, y0, x1, y1 = dict(ks._regions)[("open", "k-minigames")]
+    assert 0 <= x0 < x1 <= 1120 and 0 <= y0 < y1 <= 720     # the card is inside the window, not off to the right
+    assert click(ks, ("open", "k-minigames")) and launched == ["k-minigames"]
+
+
+def test_the_k_minigames_card_has_neither_a_detail_page_nor_an_update_button(ks):
+    scan_done(ks)
+    ks._goto("home")
+    ks._products = [optimizer_product(), launcher_product(), minigames_product()]
+    ks._updates["k-minigames"] = available(pid_name="K-MiniGames.exe")
+    ks._draw()
+    assert ("goto", "k-minigames") not in region_keys(ks) and ("update", "k-minigames") not in region_keys(ks)
+    assert ("nav", "k-minigames") not in region_keys(ks)
+
+
+def test_a_missing_k_minigames_shows_a_disabled_open_button(ks):
+    scan_done(ks)
+    ks._goto("home")
+    ks._products = [optimizer_product(), launcher_product(), minigames_product(installed=False)]
+    ks._draw()
+    assert ("open", "k-minigames") not in region_keys(ks)
+
+
+def test_the_first_two_cards_and_the_bottom_buttons_still_work_with_three_products(ks):
+    scan_done(ks)
+    ks._goto("home")
+    ks._products = [optimizer_product(), launcher_product(), minigames_product()]
+    ks._draw()
+    keys = region_keys(ks)
+    for expected in (("open", "k-optimizer"), ("goto", "k-optimizer"), ("open", "k-launcher"),
+                     ("goto", "k-launcher"), ("rescan", ""), ("shortcut", "")):
+        assert expected in keys
+    bottom = max(y1 for k, (x0, y0, x1, y1) in ks._regions if k in (("rescan", ""), ("shortcut", "")))
+    assert bottom <= 720

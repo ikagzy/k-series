@@ -28,6 +28,7 @@ _THEME_POLL_MS = 2000
 _ITCH = "https://itzkagzy.itch.io/k-launcher"
 _NAV = (("home", "Ana Sayfa"), ("k-optimizer", "K-Optimizer"), ("k-launcher", "K-Launcher"), ("settings", "Ayarlar"))
 _PRODUCTS = ("k-optimizer", "k-launcher")
+_MINI_H = 140   # the K-MiniGames card on the home page is shorter than the two big ones
 _LOGO_SETS = {"k-launcher": "kl", "k-optimizer": "ko", "k-series": "ks"}
 _NAMES = {"k-launcher": "K-Launcher", "k-optimizer": "K-Optimizer", "k-series": "K-Series"}
 _EXE = {"k-launcher": klauncher.EXE_NAME, "k-optimizer": klauncher.OPTIMIZER_EXE}
@@ -425,7 +426,7 @@ class KSeriesApp(tk.Tk):
             return
         x = _SIDEBAR + 40
         card_w, card_h, gap = (_W - _SIDEBAR - 80 - 24) / 2, 232, 24
-        for i, prod in enumerate(self._products):
+        for i, prod in enumerate(pr for pr in self._products if pr.id in _PRODUCTS):
             x0, y0 = x + i * (card_w + gap), 120
             self._card(x0, y0, x0 + card_w, y0 + card_h)
             self._logo(x0 + 24, y0 + 24, 64, prod.id)
@@ -458,21 +459,44 @@ class KSeriesApp(tk.Tk):
             bx += 110
             if has_update:
                 self._update_button(prod.id, prod, bx, by)
-        self._button(("rescan", ""), x, 380, x + 150, 420, "Yeniden tara", primary=False)
+        mini = self._product("k-minigames")
+        dy = 0
+        if mini is not None:
+            self._draw_minigames_card(mini, x, 120 + card_h + gap, card_w, _MINI_H)
+            dy = _MINI_H + gap
+        self._button(("rescan", ""), x, 380 + dy, x + 150, 420 + dy, "Yeniden tara", primary=False)
         saved = self._saved_shortcut()
         label = "Kısayol simgesini güncelle" if saved and saved.exists() else "Masaüstü kısayolu oluştur"
-        self._button(("shortcut", ""), x + 164, 380, x + 164 + 240, 420, label, primary=False)
-        c.create_text(x, 446, anchor="w", fill=theme.TEXT_FAINT, font=self._font(9),
+        self._button(("shortcut", ""), x + 164, 380 + dy, x + 164 + 240, 420 + dy, label, primary=False)
+        c.create_text(x, 446 + dy, anchor="w", fill=theme.TEXT_FAINT, font=self._font(9),
                       text="Kısayolun simgesi, K-Launcher'daki gibi seçtiğin temaya göre değişir.")
         st, has_update = self._update_state("k-series")
         if has_update:
-            by = 480
+            by = 480 + dy
             self._card(x, by, _W - 40, by + 72)
             c.create_text(x + 24, by + 28, anchor="w", text=f"K-Series için yeni sürüm: {st.release.tag}",
                           fill=theme.TEXT, font=self._font(12, True, True))
             c.create_text(x + 24, by + 50, anchor="w", text=f"Şu an v{__version__}", fill=theme.TEXT_MUTED,
                           font=self._font(9))
             self._update_button("k-series", None, _W - 40 - 24 - 140, by + 16, w=140)
+
+    def _draw_minigames_card(self, prod: products.Product, x0, y0, w, h):
+        """K-MiniGames sits in a second, shorter row: it can only be opened (it has no detail page and K-Series does
+        not update it)."""
+        c = self.canvas
+        self._card(x0, y0, x0 + w, y0 + h)
+        self._logo(x0 + 24, y0 + 20, 64, prod.id)
+        c.create_text(x0 + 108, y0 + 36, anchor="w", text=prod.name, fill=theme.TEXT, font=self._font(18, True, True))
+        c.create_text(x0 + 108, y0 + 64, anchor="w", text=prod.tagline, fill=theme.TEXT_MUTED, font=self._font(10))
+        self._status(x0 + 24, y0 + 108, prod)
+        if prod.version:
+            c.create_text(x0 + 150, y0 + 108, anchor="w", text=f"v{prod.version}", fill=theme.TEXT_MUTED,
+                          font=self._font(10))
+        bx = x0 + w - 24 - 120
+        if prod.installed:
+            self._button(("open", prod.id), bx, y0 + 84, bx + 120, y0 + 124, "Aç")
+        else:
+            self._button(("open", prod.id), bx, y0 + 84, bx + 120, y0 + 124, "Bulunamadı", enabled=False)
 
     def _draw_product(self, pid: str):
         c, p = self.canvas, self.pal

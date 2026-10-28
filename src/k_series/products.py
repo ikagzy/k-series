@@ -1,6 +1,6 @@
 """Product detection, the way SteelSeries GG detects devices: find what is installed, report its state.
 
-Both K apps are separate programs: K-Series finds them, shows their state and launches them."""
+The K apps are separate programs: K-Series finds them, shows their state and launches them."""
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,14 +26,19 @@ def _product(pid: str, name: str, tagline: str, exe: Path | None, running: bool)
 
 
 def detect(saved: Path | None = None, scan_roots: list[Path] | None = None,
-           saved_optimizer: Path | None = None, extra_dirs: list[Path] | tuple = ()) -> list[Product]:
-    """K-Optimizer and K-Launcher, each found (or not) on this computer. `saved` is the K-Launcher path."""
+           saved_optimizer: Path | None = None, extra_dirs: list[Path] | tuple = (),
+           saved_minigames: Path | None = None) -> list[Product]:
+    """K-Optimizer, K-Launcher and K-MiniGames, each found (or not) on this computer. `saved` is the K-Launcher path."""
     opt = klauncher.find_optimizer(saved=saved_optimizer, scan_roots=scan_roots, extra_dirs=extra_dirs)
     launcher = klauncher.find_exe(saved=saved, scan_roots=scan_roots)
+    minigames = klauncher.find_minigames(saved=saved_minigames, scan_roots=scan_roots, extra_dirs=extra_dirs)
     return [
         _product("k-optimizer", "K-Optimizer", "RAM, GPU ve CPU temizleyici", opt,
                  bool(opt) and any(p.samefile(opt) for p in klauncher.running_optimizer_exes() if p.exists())),
         _product("k-launcher", "K-Launcher", "Oyun ve uygulama başlatıcı", launcher, klauncher.is_running(launcher)),
+        _product("k-minigames", "K-MiniGames", "Yerel yapay zekayla kendi oyununu yap", minigames,
+                 bool(minigames) and any(p.samefile(minigames) for p in klauncher.running_minigames_exes()
+                                         if p.exists())),
     ]
 
 

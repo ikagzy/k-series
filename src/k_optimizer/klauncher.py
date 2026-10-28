@@ -4,6 +4,7 @@ K-Launcher (C#/WPF) stores theme.txt, motion.txt, ... in a `Data` folder next to
 %LOCALAPPDATA%/K-Launcher when that is not writable; very old builds used %APPDATA%/K-Launcher.
 """
 import ctypes
+import json
 import os
 from collections.abc import Callable
 from ctypes import wintypes
@@ -15,6 +16,7 @@ from k_optimizer import procscan
 
 EXE_NAME = "KLauncher.exe"
 OPTIMIZER_EXE = "K-Optimizer.exe"
+MINIGAMES_EXE = "K-MiniGames.exe"
 _SKIP_DIRS = {"obj", "bin", ".git", "node_modules", "__pycache__", "assets", "data"}
 
 
@@ -61,6 +63,10 @@ def running_exes() -> list[Path]:
 
 def running_optimizer_exes() -> list[Path]:
     return _running_named(OPTIMIZER_EXE)
+
+
+def running_minigames_exes() -> list[Path]:
+    return _running_named(MINIGAMES_EXE)
 
 
 def install_candidates() -> list[Path]:
@@ -203,4 +209,46 @@ def find_optimizer(
         if c.is_file():
             return c
     scanned = scan_for_exe(default_scan_roots() if scan_roots is None else scan_roots, name=OPTIMIZER_EXE)
+    return scanned[0] if scanned else None
+
+
+def minigames_install_path() -> Path:
+    return _env("LOCALAPPDATA", str(Path.home())) / "Programs" / "K-MiniGames" / MINIGAMES_EXE
+
+
+def registered_minigames_exe() -> Path | None:
+    """The exe path K-MiniGames saved for itself (%LOCALAPPDATA%/K-MiniGames/settings.json) when it last started."""
+    try:
+        data = json.loads((_env("LOCALAPPDATA", str(Path.home())) / "K-MiniGames" / "settings.json")
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("exe_path") if isinstance(data, dict) else None
+    path = Path(value) if isinstance(value, str) and value else None
+    return path if path is not None and path.is_file() else None
+
+
+def find_minigames(
+    saved: Path | None = None,
+    running: Callable[[], list[Path]] | None = None,
+    scan_roots: list[Path] | None = None,
+    extra_dirs: list[Path] | tuple = (),
+) -> Path | None:
+    """K-MiniGames is its own app: running copy, the path it registered itself, a saved path, next to K-Series,
+    install folders, shallow scan."""
+    live = (running or running_minigames_exes)()
+    if live:
+        return live[0]
+    for known in (registered_minigames_exe(), saved):
+        if known is not None and known.is_file():
+            return known
+    candidates = [Path(d) / MINIGAMES_EXE for d in extra_dirs] + [
+        minigames_install_path(),
+        _env("ProgramFiles", "C:/Program Files") / "K-MiniGames" / MINIGAMES_EXE,
+        _env("ProgramFiles(x86)", "C:/Program Files (x86)") / "K-MiniGames" / MINIGAMES_EXE,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    scanned = scan_for_exe(default_scan_roots() if scan_roots is None else scan_roots, name=MINIGAMES_EXE)
     return scanned[0] if scanned else None

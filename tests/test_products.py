@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from k_optimizer import klauncher
 from k_series import products, settings
 
 
@@ -17,7 +18,7 @@ def by_id(**kw):
 
 def test_both_apps_are_reported_even_when_nothing_is_installed(tmp_path):
     got = by_id(scan_roots=[tmp_path])
-    assert set(got) == {"k-optimizer", "k-launcher"}
+    assert set(got) == {"k-optimizer", "k-launcher", "k-minigames"}
     for p in got.values():
         assert p.installed is False and p.path is None and p.version is None and p.running is False
 
@@ -96,3 +97,60 @@ def test_malformed_repo_setting_falls_back_to_the_default(tmp_path):
     assert settings.repo("k-launcher", f) == "ikagzy/k-launcher"
     assert settings.repo("k-series", f) == "ikagzy/k-series"
     assert settings.flag("auto_check", True, f) is True
+
+
+# --- K-MiniGames ---------------------------------------------------------------------------------
+
+def register_minigames(tmp_path, exe: Path):
+    """K-MiniGames writes its own exe path to %LOCALAPPDATA%/K-MiniGames/settings.json when it starts."""
+    registry = tmp_path / "_local" / "K-MiniGames" / "settings.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps({"exe_path": str(exe)}), encoding="utf-8")
+
+
+def test_k_minigames_is_reported_even_when_not_installed(tmp_path):
+    got = by_id(scan_roots=[tmp_path])["k-minigames"]
+    assert (got.name, got.installed, got.path, got.version, got.running) == ("K-MiniGames", False, None, None, False)
+    assert got.tagline
+
+
+def test_k_minigames_is_found_through_the_path_it_registered_itself(tmp_path):
+    exe = make_exe(tmp_path / "anywhere", "K-MiniGames.exe")
+    register_minigames(tmp_path, exe)
+    got = by_id(scan_roots=[])["k-minigames"]
+    assert got.installed and got.path == exe
+
+
+def test_a_registered_path_that_no_longer_exists_is_ignored_and_the_next_place_is_tried(tmp_path):
+    register_minigames(tmp_path, tmp_path / "gone" / "K-MiniGames.exe")
+    saved = make_exe(tmp_path / "mine", "K-MiniGames.exe")
+    assert by_id(scan_roots=[], saved_minigames=saved)["k-minigames"].path == saved
+    assert by_id(scan_roots=[])["k-minigames"].installed is False
+
+
+def test_k_minigames_is_found_next_to_k_series_and_by_scanning(tmp_path):
+    sibling = make_exe(tmp_path / "hub", "K-MiniGames.exe")
+    assert by_id(scan_roots=[], extra_dirs=[sibling.parent])["k-minigames"].path == sibling
+    deep = make_exe(tmp_path / "Games" / "Tools" / "K-MiniGames", "K-MiniGames.exe")
+    assert by_id(scan_roots=[tmp_path / "Games"])["k-minigames"].path == deep
+
+
+def test_k_minigames_is_found_in_the_programs_folder_of_the_user(tmp_path):
+    exe = make_exe(tmp_path / "_local" / "Programs" / "K-MiniGames", "K-MiniGames.exe")
+    assert by_id(scan_roots=[])["k-minigames"].path == exe
+
+
+def test_a_running_k_minigames_is_reported_as_running(tmp_path, monkeypatch):
+    exe = make_exe(tmp_path / "apps", "K-MiniGames.exe")
+    register_minigames(tmp_path, exe)
+    monkeypatch.setattr(klauncher, "running_minigames_exes", lambda: [exe])
+    assert by_id(scan_roots=[])["k-minigames"].running is True
+
+
+def test_launch_starts_k_minigames_like_the_other_products(tmp_path):
+    exe = make_exe(tmp_path / "apps", "K-MiniGames.exe")
+    register_minigames(tmp_path, exe)
+    calls = []
+    product = by_id(scan_roots=[])["k-minigames"]
+    assert products.launch(product, popen=lambda *a, **k: calls.append((a, k))) is True
+    assert calls[0][0][0] == [str(exe)] and calls[0][1]["cwd"] == str(exe.parent)

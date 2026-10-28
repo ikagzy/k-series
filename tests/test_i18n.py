@@ -134,3 +134,8 @@ def test_the_optimizer_panel_draws_in_english(monkeypatch):
     finally:
         panel.shutdown()
         root.destroy()
+
+
+def test_the_k_minigames_tagline_has_an_english_text():
+    i18n.set_language("en")
+    assert i18n.t("Yerel yapay zekayla kendi oyununu yap") == "Make your own game with local AI"

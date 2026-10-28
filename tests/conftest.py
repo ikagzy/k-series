@@ -16,6 +16,7 @@ def isolate_k_launcher(tmp_path, monkeypatch):
     monkeypatch.setattr(klauncher, "running_pids", lambda: [])
     monkeypatch.setattr(klauncher, "running_optimizer_exes", lambda: [])
     monkeypatch.setattr(klauncher, "running_optimizer_pids", lambda: [])
+    monkeypatch.setattr(klauncher, "running_minigames_exes", lambda: [])
     monkeypatch.setattr(klauncher, "default_scan_roots", lambda: [])
     theme.set_launcher_hint(None)
     yield
