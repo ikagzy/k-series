@@ -565,3 +565,13 @@ def test_the_first_two_cards_and_the_bottom_buttons_still_work_with_three_produc
         assert expected in keys
     bottom = max(y1 for k, (x0, y0, x1, y1) in ks._regions if k in (("rescan", ""), ("shortcut", "")))
     assert bottom <= 720
+
+
+def test_a_saved_k_minigames_path_is_given_to_the_detection(ks, monkeypatch, tmp_path):
+    exe = tmp_path / "K-MiniGames.exe"
+    ksettings.save({**ksettings.load(), "minigames_path": str(exe)})
+    seen = {}
+    monkeypatch.setattr(kproducts, "detect", lambda **kw: seen.update(kw) or [])
+    ks._rescan()
+    assert pump(ks, lambda: "saved_minigames" in seen)
+    assert seen["saved_minigames"] == exe

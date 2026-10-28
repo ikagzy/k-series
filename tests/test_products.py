@@ -72,7 +72,10 @@ def test_settings_roundtrip_and_tolerate_corruption(tmp_path):
 def test_saved_path_helpers(tmp_path):
     f = tmp_path / "s.json"
     assert settings.launcher_path(f) is None and settings.optimizer_path(f) is None
-    settings.save({"launcher_path": "C:/a/KLauncher.exe", "optimizer_path": "C:/b/K-Optimizer.exe"}, f)
+    assert settings.minigames_path(f) is None
+    settings.save({"launcher_path": "C:/a/KLauncher.exe", "optimizer_path": "C:/b/K-Optimizer.exe",
+                   "minigames_path": "C:/c/K-MiniGames.exe"}, f)
+    assert settings.minigames_path(f) == Path("C:/c/K-MiniGames.exe")
     assert settings.launcher_path(f) == Path("C:/a/KLauncher.exe")
     assert settings.optimizer_path(f) == Path("C:/b/K-Optimizer.exe")
 

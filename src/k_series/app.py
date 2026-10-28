@@ -147,10 +147,11 @@ class KSeriesApp(tk.Tk):
     def _rescan(self):
         self._scanning = True
         theme.reset_launcher_cache()
-        saved, saved_opt = settings.launcher_path(), settings.optimizer_path()
+        saved, saved_opt, saved_mg = settings.launcher_path(), settings.optimizer_path(), settings.minigames_path()
         extra = [Path(sys.executable).parent] if getattr(sys, "frozen", False) else []
         threading.Thread(target=lambda: self._scan_q.put(
-            products.detect(saved=saved, saved_optimizer=saved_opt, extra_dirs=extra)), daemon=True).start()
+            products.detect(saved=saved, saved_optimizer=saved_opt, extra_dirs=extra,
+                            saved_minigames=saved_mg)), daemon=True).start()
 
     def _rescan_and_recheck(self):
         """After an install: look at the installed versions again, then ask GitHub again, so a finished update

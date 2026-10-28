@@ -57,3 +57,8 @@ def repo(product_id: str, path: Path | None = None) -> str:
 def optimizer_path(path: Path | None = None) -> Path | None:
     value = load(path).get("optimizer_path")
     return Path(value) if isinstance(value, str) and value else None
+
+
+def minigames_path(path: Path | None = None) -> Path | None:
+    value = load(path).get("minigames_path")
+    return Path(value) if isinstance(value, str) and value else None
