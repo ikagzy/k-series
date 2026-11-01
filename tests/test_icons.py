@@ -90,3 +90,9 @@ def test_photo_returns_a_tk_image_of_the_theme_logo_and_caches_it():
         assert icons.photo(root, theme.PALETTES["midnight"], 64) is not a
     finally:
         root.destroy()
+
+
+def test_k_minigames_has_its_own_icon_for_every_theme():
+    for pal in theme.PALETTES.values():
+        path = icons.icon_for(pal, "km")
+        assert path.parent.name == "km" and path.is_file()
