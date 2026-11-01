@@ -26,6 +26,7 @@ _SIDEBAR = 232
 _FRAME_MS = 50
 _THEME_POLL_MS = 2000
 _ITCH = "https://itzkagzy.itch.io/k-launcher"
+_ITCH_MINIGAMES = "https://itzkagzy.itch.io/k-minigames"
 _NAV = (("home", "Ana Sayfa"), ("k-optimizer", "K-Optimizer"), ("k-launcher", "K-Launcher"), ("settings", "Ayarlar"))
 _PRODUCTS = ("k-optimizer", "k-launcher")
 _MINI_H = 140   # the K-MiniGames card on the home page is shorter than the two big ones
@@ -497,7 +498,7 @@ class KSeriesApp(tk.Tk):
         if prod.installed:
             self._button(("open", prod.id), bx, y0 + 84, bx + 120, y0 + 124, "Aç")
         else:
-            self._button(("open", prod.id), bx, y0 + 84, bx + 120, y0 + 124, "Bulunamadı", enabled=False)
+            self._button(("web", prod.id), bx, y0 + 84, bx + 120, y0 + 124, "İndir")   # its itch.io page
 
     def _draw_product(self, pid: str):
         c, p = self.canvas, self.pal
@@ -674,7 +675,10 @@ class KSeriesApp(tk.Tk):
         elif kind == "pick":
             self._pick_exe(arg)
         elif kind == "web":
-            webbrowser.open(_ITCH if arg == "k-launcher" else f"https://github.com/{settings.repo(arg)}/releases")
+            if arg == "k-minigames":
+                webbrowser.open(_ITCH_MINIGAMES)
+            else:
+                webbrowser.open(_ITCH if arg == "k-launcher" else f"https://github.com/{settings.repo(arg)}/releases")
         elif kind == "theme":
             ok = theme.save(arg)
             self._theme_changed(theme.load())

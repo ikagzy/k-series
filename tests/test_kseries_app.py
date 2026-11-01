@@ -546,12 +546,16 @@ def test_the_k_minigames_card_has_neither_a_detail_page_nor_an_update_button(ks)
     assert ("nav", "k-minigames") not in region_keys(ks)
 
 
-def test_a_missing_k_minigames_shows_a_disabled_open_button(ks):
+def test_a_missing_k_minigames_offers_its_itch_page_instead_of_open(ks, monkeypatch):
     scan_done(ks)
     ks._goto("home")
     ks._products = [optimizer_product(), launcher_product(), minigames_product(installed=False)]
     ks._draw()
     assert ("open", "k-minigames") not in region_keys(ks)
+    opened = []
+    monkeypatch.setattr(kapp.webbrowser, "open", lambda url, *a, **k: opened.append(url))
+    assert click(ks, ("web", "k-minigames"))
+    assert opened == ["https://itzkagzy.itch.io/k-minigames"]
 
 
 def test_the_first_two_cards_and_the_bottom_buttons_still_work_with_three_products(ks):
