@@ -352,3 +352,10 @@ def test_install_exe_rolls_back_when_the_move_fails(tmp_path, monkeypatch):
         updater.install_exe(new, target, running_pids=lambda: [], request_close=lambda p: None,
                             run=lambda *a, **k: 1 / 0, sleep=lambda s: None)
     assert target.read_bytes() == b"old"
+
+
+def test_a_restarted_exe_gets_a_fresh_pyinstaller_environment(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda argv, **kw: seen.update(kw))
+    updater._spawn(["x.exe"], cwd=".")
+    assert seen["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"

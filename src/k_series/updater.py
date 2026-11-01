@@ -188,8 +188,11 @@ def _polite_close(pids: list[int]) -> None:
 
 def _spawn(argv, **kwargs):
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    # A one-file exe that starts another exe would pass its own unpacked folder on; the new process then shares it
+    # and the old one, on exit, cannot delete it ("Failed to remove temporary directory"). Start it fresh.
+    env = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
     return subprocess.Popen(argv, creationflags=flags, close_fds=True, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, **kwargs)
 
 
 def install_launcher(new_exe: Path, running_pids=None, request_close=_polite_close,
